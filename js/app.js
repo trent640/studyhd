@@ -785,6 +785,7 @@
         </section>
         <section class="chunk"><h2><span class="chunk-num">5</span>Go further</h2>
           <div class="link-list">${m.sourceUrl ? linkRow([m.sourceUrl, m.sourceLabel || 'Official documentation', 'Docs']) : ''}
+          ${(m.refs || []).map(linkRow).join('')}
           <button type="button" class="resource-link as-button" data-note><span class="tag" style="background:#ede9fe;color:#5b21b6">Notes</span>Save this step to my notes<span class="out">→</span></button>
           <button type="button" class="resource-link as-button" data-addtask><span class="tag" style="background:#dcfce7;color:#166534">Tasks</span>Add this step to my tasks<span class="out">+</span></button></div>
         </section>
@@ -1068,10 +1069,10 @@
 
   /* ================= Roadmap (visual map + drawer) ================= */
   let currentRoadmap = null;
-  function nodeHtml({ key, label, kind }) {
+  function nodeHtml({ key, label, kind, meta }) {
     const st = key ? Progress.get(key) : 'pending';
     const cls = ['node', kind, st !== 'pending' ? st : ''].filter(Boolean).join(' ');
-    return `<button type="button" class="${cls}" data-node="${esc(key || '')}" data-kind="${kind}">${esc(label)}<span class="node-check" aria-hidden="true">✓</span></button>`;
+    return `<button type="button" class="${cls}" data-node="${esc(key || '')}" data-kind="${kind}">${esc(label)}${meta ? `<span class="node-meta">${esc(meta)}</span>` : ''}<span class="node-check" aria-hidden="true">✓</span></button>`;
   }
   function roadmapHtml(title, sections) {
     return `<div class="roadmap" id="roadmap">
@@ -1080,7 +1081,7 @@
       ${sections.map((sec, si) => {
         const left = [], right = [];
         sec.children.forEach((c, i) => (i % 2 === 0 ? left : right).push(c));
-        return `<div class="rm-section" data-section="${si}">
+        return `${sec.checkpoint ? `<div class="rm-checkpoint"><span>${esc(sec.checkpoint)}</span></div>` : ''}<div class="rm-section" data-section="${si}">
           <div class="rm-side left">${left.map(nodeHtml).join('')}</div>
           <div class="rm-center">${nodeHtml(sec.main)}</div>
           <div class="rm-side right">${right.map(nodeHtml).join('')}</div>
@@ -1134,23 +1135,87 @@
     const pct = o.total ? Math.round(((o.done + o.skipped) / o.total) * 100) : 0;
     return `<div class="progress-line" id="progressLine"><span class="progress-badge">${pct}% DONE</span><span class="progress-text">${o.done} of ${o.total} done · ${o.learning} in progress · ${o.skipped} skipped</span>${bar(pct, 'Roadmap progress')}</div>`;
   }
-  function renderFullRoadmap() {
-    const sections = MODULES.map((m) => ({ main: { key: 'module:' + m.id, label: m.title, kind: 'main' }, children: m.lessons.map((l, i) => ({ key: m.id + ':' + i, label: l.title, kind: 'sub' })) }));
-    currentRoadmap = { modules: MODULES };
-    setPage(`<div class="page"><div class="container">
-      ${pageHead({ crumbs: [['index.html', 'Home'], [null, 'Roadmap']], title: 'Computer science roadmap',
-        desc: 'The whole path on one map, in a suggested order. Yellow boxes are modules; light boxes are steps. Click any box to preview it, change its status, or open the full step.',
-        actions: '<button class="btn dark small" type="button" data-action="resume">Resume where I left off</button><a class="btn small" href="learn.html">Learn view</a><button class="btn small" type="button" data-action="reset-progress">Reset progress</button>',
-        extra: progressLine(MODULES) })}
-      <div class="roadmap-wrap">${roadmapHtml('Computer Science', sections)}</div>
+  // W3Schools-style topic menu: every module grouped by certification, current topic highlighted.
+  function roadmapSidebar(currentId, pathId) {
+    const jp = JOBPATHS.find((p) => p.id === pathId);
+    const certs = jp ? jp.certs.map(certById).filter(Boolean) : CERTS;
+    const menu = `<div class="rm-side-head"><b>Topics</b>
+        <select class="input rm-path" aria-label="Job path"><option value="">All certifications</option>${JOBPATHS.map((p) => `<option value="${p.id}"${p.id === pathId ? ' selected' : ''}>${esc(p.title)}</option>`).join('')}</select></div>
+      <a class="rm-side-link${!currentId ? ' current' : ''}" href="roadmap.html${pathId ? '?path=' + pathId : ''}"${!currentId ? ' aria-current="page"' : ''}>Whole roadmap</a>
+      ${certs.map((c) => `<div class="rm-side-group"><span class="rm-side-cert">${esc(c.title)}</span>
+        ${c.modules.map(byId).filter(Boolean).map((m) => {
+          const st = Progress.moduleStats(m);
+          const complete = st.done + st.skipped === st.total;
+          return `<a class="rm-side-link${m.id === currentId ? ' current' : ''}" href="roadmap.html?m=${m.id}${pathId ? '&path=' + pathId : ''}"${m.id === currentId ? ' aria-current="page"' : ''}><span>${esc(m.title)}</span><small>${complete ? '✓' : `${st.done + st.skipped}/${st.total}`}</small></a>`;
+        }).join('')}</div>`).join('')}`;
+    return `<aside class="rm-sidebar" aria-label="Roadmap topics">
+      <details class="rm-side-mobile"><summary>All topics</summary><nav>${menu}</nav></details>
+      <nav class="rm-side-desktop">${menu}</nav>
+    </aside>`;
+  }
+  function wireRoadmapSidebar(currentId) {
+    $$('.rm-path', app).forEach((sel) => sel.addEventListener('change', () => {
+      const v = sel.value;
+      location.href = currentId ? `roadmap.html?m=${currentId}${v ? '&path=' + v : ''}` : `roadmap.html${v ? '?path=' + v : ''}`;
+    }));
+  }
+  // W3Schools-style big Previous / Next buttons.
+  function w3Nav(list, m, pathId) {
+    const i = list.indexOf(m);
+    const prev = list[i - 1], next = list[i + 1];
+    const q = pathId ? '&path=' + pathId : '';
+    return `<div class="w3-nav">
+      ${prev ? `<a class="w3-btn" href="roadmap.html?m=${prev.id}${q}" rel="prev">❮ Previous<small>${esc(prev.title)}</small></a>` : '<span></span>'}
+      ${next ? `<a class="w3-btn" href="roadmap.html?m=${next.id}${q}" rel="next">Next ❯<small>${esc(next.title)}</small></a>` : '<span></span>'}
+    </div>`;
+  }
+  function pathModules(pathId) {
+    const jp = JOBPATHS.find((p) => p.id === pathId);
+    if (!jp) return MODULES;
+    const ids = jp.certs.map(certById).filter(Boolean).flatMap((c) => c.modules);
+    return MODULES.filter((m) => ids.includes(m.id));
+  }
+
+  function moduleSection(m, checkpoint) {
+    const st = Progress.moduleStats(m);
+    return { checkpoint, main: { key: 'module:' + m.id, label: m.title, kind: 'main', meta: `${st.done + st.skipped}/${st.total}` },
+      children: m.lessons.map((l, i) => ({ key: m.id + ':' + i, label: l.title, kind: 'sub' })) };
+  }
+  function renderFullRoadmap(pathId) {
+    const jp = JOBPATHS.find((x) => x.id === pathId);
+    const certs = jp ? jp.certs.map(certById).filter(Boolean) : CERTS;
+    const list = pathModules(jp ? jp.id : '');
+    // Group by certification so the spine shows checkpoints, in the suggested order within each.
+    const sections = [];
+    certs.forEach((c) => {
+      MODULES.filter((m) => c.modules.includes(m.id)).forEach((m, k) => sections.push(moduleSection(m, k === 0 ? c.title : '')));
+    });
+    currentRoadmap = { modules: list };
+    const o = Progress.overall(list);
+    setPage(`<div class="page"><div class="container wide">
+      <div class="rm-layout">
+        ${roadmapSidebar(null, jp ? jp.id : '')}
+        <div class="rm-main">
+          ${pageHead({ crumbs: [['index.html', 'Home'], [null, 'Roadmap']], title: jp ? jp.title + ' roadmap' : 'Computer science roadmap',
+            desc: 'The whole path on one map. Each checkpoint is a certification; amber boxes are modules (with how many steps you have done) and light boxes are steps. Pick a topic on the left, or click any box.',
+            actions: '<button class="btn yellow small" type="button" data-action="resume">Resume where I left off</button><a class="btn small" href="learn.html' + (jp ? '?path=' + jp.id : '') + '">Learn view</a><button class="btn small" type="button" data-action="reset-progress">Reset progress</button>',
+            extra: progressLine(list) })}
+          <div class="fcc-blocks">${certs.map((c) => { const cs = certStats(c); return `<a class="fcc-block" href="learn.html#cert-${c.id}"><b>${esc(c.title)}</b><span>${cs.stepsDone}/${cs.total} steps · ${cs.projDone}/${cs.projTotal} projects</span>${bar(cs.pct, c.title)}</a>`; }).join('')}</div>
+          <div class="roadmap-wrap">${roadmapHtml(jp ? jp.title : 'Computer Science', sections)}</div>
+          <p class="hint-text">${o.done} of ${o.total} steps done on this roadmap.</p>
+        </div>
+      </div>
     </div></div>`);
+    wireRoadmapSidebar(null);
     afterRoadmapRender();
   }
-  function renderModuleRoadmap(id) {
+  function renderModuleRoadmap(id, pathId) {
     const m = byId(id);
     if (!m) return renderNotFound();
+    const jp = JOBPATHS.find((x) => x.id === pathId);
+    const list = jp && pathModules(jp.id).includes(m) ? pathModules(jp.id) : MODULES;
     const sections = [
-      { main: { key: 'module:' + m.id, label: m.title, kind: 'main' }, children: m.lessons.map((l, i) => ({ key: m.id + ':' + i, label: l.title, kind: 'sub' })) },
+      moduleSection(m, ''),
       { main: { key: 'practice:' + m.id, label: 'Check yourself', kind: 'main' }, children: [
         { key: 'extra:' + m.id + ':example', label: 'Real-world example', kind: 'sub' },
         { key: 'extra:' + m.id + ':quiz', label: 'Quick quiz', kind: 'sub' },
@@ -1158,20 +1223,41 @@
         { key: 'extra:' + m.id + ':docs', label: 'Official docs', kind: 'sub' },
       ] },
     ];
-    const idx = MODULES.indexOf(m);
-    const prev = MODULES[idx - 1], next = MODULES[idx + 1];
+    const st = Progress.moduleStats(m);
+    const cert = certOf(m.id);
+    const challenges = CHALLENGES.filter((c) => c.module === m.id);
+    const first = m.lessons[0];
+    const tryCode = (first.code || '').split('\n').slice(0, 8).join('\n');
     currentRoadmap = { modules: [m] };
-    setPage(`<div class="page"><div class="container">
-      ${pageHead({ crumbs: [['index.html', 'Home'], ['roadmap.html', 'Roadmap'], [null, m.title]], title: m.title + ' roadmap',
-        desc: esc(m.desc) + `<br><b>By the end:</b> ${esc(m.outcome)}`,
-        actions: `<a class="btn dark small" href="${lessonUrl(m.id, (Progress.next([m]) || { i: 0 }).i)}">Study step by step →</a><button class="btn small" type="button" data-action="resume">Preview next step</button><a class="btn small" href="${esc(m.sourceUrl)}" target="_blank" rel="noopener noreferrer">${esc(m.sourceLabel || 'Docs')} ↗</a><button class="btn small" type="button" data-action="reset-progress">Reset progress</button>`,
-        extra: progressLine([m]) })}
-      <div class="roadmap-wrap">${roadmapHtml(m.title, sections)}</div>
-      <div class="btn-row" style="margin-top:14px;justify-content:space-between">
-        ${prev ? `<a class="btn" href="roadmap.html?m=${prev.id}">← ${esc(prev.title)}</a>` : '<span></span>'}
-        ${next ? `<a class="btn" href="roadmap.html?m=${next.id}">${esc(next.title)} →</a>` : ''}
+    setPage(`<div class="page"><div class="container wide">
+      <div class="rm-layout">
+        ${roadmapSidebar(m.id, jp && list !== MODULES ? jp.id : '')}
+        <div class="rm-main">
+          ${w3Nav(list, m, jp && list !== MODULES ? jp.id : '')}
+          ${pageHead({ crumbs: [['index.html', 'Home'], ['roadmap.html', 'Roadmap'], [null, m.title]], title: m.title,
+            desc: esc(m.desc) + `<br><b>By the end:</b> ${esc(m.outcome)}`,
+            actions: `<a class="btn yellow small" href="${lessonUrl(m.id, (Progress.next([m]) || { i: 0 }).i)}">${st.done + st.skipped === 0 ? 'Start' : st.done + st.skipped === st.total ? 'Review' : 'Continue'} step by step →</a><button class="btn small" type="button" data-action="resume">Preview next step</button><a class="btn small" href="${esc(m.sourceUrl)}" target="_blank" rel="noopener noreferrer">${esc(m.sourceLabel || 'Docs')} ↗</a><button class="btn small" type="button" data-action="reset-progress">Reset progress</button>`,
+            extra: progressLine([m]) })}
+          <div class="roadmap-wrap">${roadmapHtml(m.title, sections)}</div>
+          <section class="card fcc-steps" aria-labelledby="stepsTitle">
+            <div class="today-head"><h2 id="stepsTitle">Steps</h2><span class="hint-text" style="margin:0">${st.done + st.skipped} of ${st.total} complete${cert ? ' · part of ' + esc(cert.title) : ''}</span></div>
+            <ol class="step-rows">${m.lessons.map((l, i) => { const s2 = Progress.get(m.id + ':' + i); return `<li class="step-row ${s2}"><span class="step-mark" aria-hidden="true">${s2 === 'done' ? '✓' : s2 === 'skipped' ? '–' : i + 1}</span><a href="${lessonUrl(m.id, i)}"><b>${esc(l.title)}</b><small>${esc(l.objective)}</small></a><span class="step-meta">${timeTag(lessonMinutes(l))}<span class="sr-only">${STATUS_LABEL[s2]}</span></span></li>`; }).join('')}</ol>
+            <div class="btn-row">${(m.lectures || []).map((lec, k) => `<a class="btn small lecture-link" href="lecture.html?m=${m.id}&l=${k}">▶ Lecture ${k + 1}: ${esc(lec.title)}</a>`).join('')}<a class="btn small" href="lesson.html?m=${m.id}&review=1">${m.finalQuiz ? 'Final quiz' : 'Module quiz'}</a></div>
+          </section>
+          <section class="tryit" aria-labelledby="tryTitle">
+            <h2 id="tryTitle">Example</h2>
+            <div class="tryit-box">
+              <pre class="code light"><code>${esc(tryCode)}</code></pre>
+              <a class="btn yellow" href="${challenges.length ? 'practice.html?c=' + challenges[0].id : lessonUrl(m.id, 0)}">Try it Yourself »</a>
+            </div>
+            ${(m.refs || []).length ? `<h3 class="refs-title">Learn more elsewhere</h3><div class="link-list">${m.refs.map(linkRow).join('')}</div>` : ''}
+            ${challenges.length > 1 ? `<p class="hint-text">More practice: ${challenges.slice(1).map((c) => `<a href="practice.html?c=${c.id}">${esc(c.title)}</a>`).join(' · ')}</p>` : ''}
+          </section>
+          ${w3Nav(list, m, jp && list !== MODULES ? jp.id : '')}
+        </div>
       </div>
     </div></div>`);
+    wireRoadmapSidebar(m.id);
     afterRoadmapRender();
   }
   function afterRoadmapRender() {
@@ -2179,7 +2265,7 @@
     if (PAGE === 'home') renderHome();
     else if (PAGE === 'learn') renderLearn();
     else if (PAGE === 'lesson') renderLesson();
-    else if (PAGE === 'roadmap') p.get('m') ? renderModuleRoadmap(p.get('m')) : renderFullRoadmap();
+    else if (PAGE === 'roadmap') p.get('m') ? renderModuleRoadmap(p.get('m'), p.get('path')) : renderFullRoadmap(p.get('path'));
     else if (PAGE === 'practice') renderPractice();
     else if (PAGE === 'projects') renderProjects();
     else if (PAGE === 'interview') renderInterview();

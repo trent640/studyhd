@@ -84,7 +84,7 @@ EXPLAIN ANALYZE SELECT ...;   -- MySQL 8: actual timings`,
       'A view gives reports a simple, stable table to read; a procedure records a lesson as done in one call.',
 String.raw`CREATE VIEW module_completion AS
 SELECT m.id AS module_id, m.title,
-       ROUND(100 * AVG(p.status = 'done'), 1) AS pct_done
+       ROUND(100 * AVG(COALESCE(p.status = 'done', 0)), 1) AS pct_done   -- no row = not done
 FROM modules m
 JOIN lessons ls ON ls.module_id = m.id
 LEFT JOIN progress p ON p.lesson_id = ls.id

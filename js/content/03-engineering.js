@@ -554,7 +554,7 @@ interface BookRepository extends JpaRepository<Book, Long> {
 String.raw`@WebMvcTest(BookController.class)
 class BookControllerTest {
     @Autowired MockMvc mvc;
-    @MockBean BookService service;
+    @MockitoBean BookService service;   // Spring Boot 3.4+ (older versions: @MockBean)
 
     @Test
     void rejectsBlankTitle() throws Exception {
@@ -571,7 +571,7 @@ curl -i -X POST localhost:8080/api/books \
   -H 'Content-Type: application/json' \
   -d '{"title":"Dune","author":"Frank Herbert"}'`,
       'Build a Postman collection for every endpoint, including two error cases each.',
-      'What does @MockBean do in a @WebMvcTest?',
+      'What does @MockitoBean do in a @WebMvcTest?',
       'It replaces the real service bean with a Mockito mock in the Spring context, so the test checks only the web layer.'),
     L('API design and documentation',
       'Name resources consistently, version your API, and publish an OpenAPI document.',

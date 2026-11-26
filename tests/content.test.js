@@ -80,3 +80,12 @@ test('challenge reference solutions pass and starters fail', () => {
     assert.ok(c.java && c.hint && c.complexity, c.id + ' extras');
   }
 });
+
+test('further-reading links are W3Schools or freeCodeCamp https pages', () => {
+  const withRefs = M.filter((m) => m.refs);
+  assert.ok(withRefs.length >= 20, 'most modules link to further reading');
+  for (const m of withRefs) for (const [url, title, source] of m.refs) {
+    assert.match(url, /^https:\/\/www\.(w3schools\.com|freecodecamp\.org)\//, m.id + ' ' + url);
+    assert.ok(title && ['W3Schools', 'freeCodeCamp'].includes(source), m.id);
+  }
+});

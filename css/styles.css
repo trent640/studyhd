@@ -835,3 +835,79 @@ body.theme-contrast .goal-box { border: 2px solid #000; border-left-width: 6px; 
   .logo { font-size: 16px; }
 }
 .grid-2 > *, .challenge-layout > *, .desk-grid > * { min-width: 0; }
+
+/* =========================================================
+   Roadmap: W3Schools-style topic menu and Previous/Next,
+   freeCodeCamp-style blocks and step rows, roadmap.sh-style graph.
+   ========================================================= */
+.rm-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 20px; align-items: start; }
+.rm-sidebar { position: sticky; top: 72px; max-height: calc(100vh - 90px); overflow-y: auto; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.rm-side-mobile { display: none; }
+.rm-side-desktop { padding: 10px 0 14px; }
+.rm-side-head { padding: 4px 14px 10px; display: grid; gap: 6px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.rm-side-head b { font-size: 15px; }
+.rm-side-head select { font-size: 13px; padding: 6px 8px; }
+.rm-side-group { margin-top: 8px; }
+.rm-side-cert { display: block; padding: 6px 14px 4px; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--mute); }
+.rm-side-link { display: flex; justify-content: space-between; gap: 8px; padding: 6px 14px; color: var(--ink); text-decoration: none; font-size: 14px; line-height: 1.35; border-left: 4px solid transparent; }
+.rm-side-link small { color: var(--mute); font-size: 12px; white-space: nowrap; }
+.rm-side-link:hover { background: var(--paper-2); color: var(--ink); }
+.rm-side-link.current { background: var(--accent); color: #fff; border-left-color: var(--accent-hover); font-weight: 600; }
+.rm-side-link.current small { color: #e2efeb; }
+.rm-main { min-width: 0; }
+.rm-main .page-head { margin-bottom: 14px; }
+
+/* W3Schools-style Previous / Next */
+.w3-nav { display: flex; justify-content: space-between; gap: 10px; margin: 0 0 14px; }
+.rm-main > .w3-nav:last-child { margin: 16px 0 0; }
+.w3-btn { display: inline-flex; flex-direction: column; background: var(--accent); color: #fff; text-decoration: none; padding: 9px 18px; border-radius: 8px; font-weight: 700; font-size: 15px; max-width: 48%; }
+.w3-btn:hover { background: var(--accent-hover); color: #fff; }
+.w3-btn small { font-weight: 400; font-size: 12px; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.w3-btn[rel="next"] { text-align: right; margin-left: auto; }
+
+/* freeCodeCamp-style certification blocks */
+.fcc-blocks { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.fcc-block { display: grid; gap: 4px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; text-decoration: none; color: var(--ink); }
+.fcc-block:hover { border-color: var(--accent); color: var(--ink); }
+.fcc-block b { font-size: 14px; }
+.fcc-block span { font-size: 12px; color: var(--mute); }
+.fcc-steps { margin-top: 14px; }
+.step-rows { list-style: none; padding: 0; margin: 10px 0 12px; display: grid; gap: 6px; }
+.step-row { display: flex; align-items: center; gap: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; background: var(--paper); }
+.step-row a { flex: 1; min-width: 0; text-decoration: none; color: var(--ink); }
+.step-row a small { display: block; color: var(--mute); font-size: 13px; }
+.step-row a:hover b { color: var(--accent); text-decoration: underline; }
+.step-mark { width: 28px; height: 28px; flex-shrink: 0; border-radius: 50%; border: 2px solid #b7c0c4; display: grid; place-items: center; font-size: 13px; font-weight: 700; color: var(--ink-2); }
+.step-row.done .step-mark { background: var(--accent); border-color: var(--accent); color: #fff; }
+.step-row.learning .step-mark { background: var(--node); border-color: #c9a646; }
+.step-row.skipped .step-mark { background: var(--node-skip); }
+.step-meta { flex-shrink: 0; }
+
+/* W3Schools-style "Try it Yourself" */
+.tryit { margin-top: 14px; }
+.tryit h2 { font-size: 18px; margin: 0 0 8px; }
+.tryit-box { background: var(--paper-2); border: 1px solid var(--line); border-left: 5px solid var(--accent); border-radius: 0 10px 10px 0; padding: 12px 16px 14px; }
+.tryit-box pre.code.light { background: var(--paper); margin: 0 0 12px; white-space: pre; }
+
+/* roadmap.sh-style checkpoints and progress on module nodes */
+.rm-checkpoint { position: relative; z-index: 1; text-align: center; margin: 6px 0 22px; }
+.rm-checkpoint span { display: inline-block; background: var(--ink); color: #fff; font-weight: 700; font-size: 13px; padding: 5px 14px; border-radius: 99px; }
+.node-meta { display: block; font-size: 11.5px; font-weight: 600; color: var(--ink-2); margin-top: 2px; }
+body.theme-dark .rm-checkpoint span { background: var(--accent); color: #0f1a1c; }
+body.theme-dark .rm-side-link.current small { color: #0f1a1c; }
+
+@media (max-width: 1000px) {
+  .rm-layout { grid-template-columns: 1fr; }
+  .rm-sidebar { position: static; max-height: none; overflow: visible; }
+  .rm-side-desktop { display: none; }
+  .rm-side-mobile { display: block; }
+  .rm-side-mobile > summary { cursor: pointer; padding: 12px 14px; font-weight: 700; }
+  .rm-side-mobile nav { padding-bottom: 10px; max-height: 60vh; overflow-y: auto; }
+}
+@media (max-width: 720px) {
+  .rm-checkpoint { text-align: left; margin-left: 26px; }
+  .w3-btn { padding: 8px 12px; }
+  .step-meta { display: none; }
+}
+.refs-title { font-size: 15px; margin: 14px 0 8px; }
+.resource-link .tag { white-space: nowrap; }

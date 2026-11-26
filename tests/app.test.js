@@ -598,3 +598,25 @@ test('pomodoro: focus length setting, counts sessions and switches to a break', 
   assert.match(await page.getAttribute('.badge:has-text("Focused")', 'class'), /earned/);
   noErrors();
 });
+
+test('roadmap: W3Schools-style topics and Previous/Next, freeCodeCamp-style steps, checkpoints and Try it', async () => {
+  await go('roadmap.html?path=java-ai');
+  const certs = await page.evaluate(() => window.StudyDesk.JOBPATHS.find((p) => p.id === 'java-ai').certs.length);
+  assert.equal(await count('.rm-checkpoint'), certs, 'one checkpoint per certification');
+  assert.equal(await count('.fcc-block'), certs);
+  assert.match(await page.textContent('.rm-side-link.current'), /Whole roadmap/);
+  await page.click('.rm-side-desktop .rm-side-link:has-text("Object-oriented design")');
+  await page.waitForURL(/roadmap\.html\?m=oop&path=java-ai/);
+  assert.match(await page.textContent('.rm-side-desktop .rm-side-link.current'), /Object-oriented design/);
+  assert.equal(await count('.step-row'), 7);
+  assert.equal(await page.getAttribute('.tryit .btn', 'href'), 'practice.html?c=course-class');
+  assert.ok(await count('.tryit .resource-link') > 0, 'W3Schools / freeCodeCamp links');
+  await page.click('.w3-nav >> nth=0 >> a[rel="next"]');
+  await page.waitForURL(/m=data-structures/);
+  await page.selectOption('.rm-side-desktop .rm-path', '');
+  await page.waitForURL(/roadmap\.html\?m=data-structures$/);
+  await page.setViewportSize({ width: 375, height: 800 });
+  await page.reload();
+  assert.ok(await page.isVisible('.rm-side-mobile summary'), 'topics collapse on phones');
+  noErrors();
+});
