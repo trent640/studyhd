@@ -681,3 +681,26 @@ test('Java "predict the output" questions can be run for real', async (t) => {
   assert.equal((await page.textContent('#out-java-div')).trim(), '3\n3.5');
   noErrors();
 });
+
+test('security: learner JavaScript cannot reach the network or storage from the Worker', async () => {
+  await go('practice.html?c=two-sum');
+  await page.waitForSelector('.CodeMirror');
+  await setCode(`function twoSum() {
+  const probes = [typeof fetch, typeof XMLHttpRequest, typeof WebSocket, typeof importScripts, typeof indexedDB, typeof EventSource,
+    typeof Object.getPrototypeOf(self).fetch, typeof WorkerGlobalScope.prototype.fetch];
+  return probes.join(',');
+}`);
+  await page.click('#runChallenge');
+  await page.waitForFunction(() => /tests pass/.test(document.querySelector('#testSummary').textContent));
+  assert.match(await page.textContent('#testList'), /undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined/);
+  noErrors();
+});
+
+test('security: only the practice page may run eval, WebAssembly and workers', async () => {
+  for (const p of ['index.html', 'lesson.html', 'community.html', 'notes.html']) {
+    const csp = (await fetch(base + p)).headers.get('content-security-policy');
+    assert.match(csp, /script-src 'self'; worker-src 'none'/, p);
+    assert.doesNotMatch(csp, /unsafe-eval/, p);
+  }
+  assert.match((await fetch(base + 'practice.html')).headers.get('content-security-policy'), /'unsafe-eval'/);
+});

@@ -149,8 +149,28 @@ public class Main { public static void main(String[] a) throws Exception {
   const r = await member.post('/api/run', { files: { 'Main.java': main } });
   assert.equal(r.status, 200);
   assert.equal(r.data.stdout.trim(), 'hidden\nhidden\noffline');
+  // It cannot change the host's files, see other runs in /tmp, or fill the disk; it can write in its own folder.
+  const writes = `import java.nio.file.*;
+public class Main { public static void main(String[] a) throws Exception {
+  for (String f : new String[] { "/etc/sd-escape", "/usr/sd-escape", "/tmp/sd-escape", "/var/tmp/sd-escape", "/sd-escape", "own.txt" }) {
+    try { Files.writeString(Path.of(f), "x"); System.out.println("wrote " + f); } catch (Exception e) { System.out.println("blocked"); }
+  }
+  try (var s = Files.list(Path.of("/tmp"))) { System.out.println("tmp:" + s.count()); }
+  try { Files.write(Path.of("big.bin"), new byte[40 * 1024 * 1024]); System.out.println("big written"); } catch (Throwable e) { System.out.println("big blocked"); }
+}}`;
+  const w = await member.post('/api/run', { files: { 'Main.java': writes } });
+  assert.equal(w.data.stdout.trim(), 'blocked\nblocked\nblocked\nblocked\nblocked\nwrote own.txt\ntmp:0\nbig blocked');
+  for (const f of ['/etc/sd-escape', '/usr/sd-escape', '/sd-escape']) assert.equal(fs.existsSync(f), false, f);
   const loop = await member.post('/api/run', { files: { 'Main.java': 'public class Main { public static void main(String[] a) { while (true) {} } }' } });
   assert.equal(loop.data.timedOut, true);
+  // A fork bomb hits the process limit instead of taking over the machine.
+  const bomb = `public class Main { public static void main(String[] a) throws Exception {
+  int n = 0;
+  try { for (; n < 5000; n++) { Thread t = new Thread(() -> { try { Thread.sleep(60000); } catch (Exception e) {} }); t.setDaemon(true); t.start(); } } catch (Throwable e) { System.out.println("limited"); }
+  System.out.println(n < 5000 ? "capped" : "unlimited");
+}}`;
+  const b = await member.post('/api/run', { files: { 'Main.java': bomb } });
+  assert.match(b.data.stdout, /capped/);
 });
 
 test('every Java challenge: the reference solution passes and the starter fails (real javac + java)', async (t) => {
@@ -216,4 +236,22 @@ test('projects link only to real challenges', () => {
   const withChecks = window.SD_PROJECTS.filter((p) => p.checks);
   assert.ok(withChecks.length >= 7);
   for (const p of withChecks) for (const id of p.checks) assert.ok(ids.has(id), p.id + ' -> ' + id);
+});
+
+test('behind a proxy, only the address the proxy added is trusted (a faked X-Forwarded-For does not dodge limits)', async () => {
+  const { server: s2 } = await createApp({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'sd-xff-')), trustProxy: true, maxRegistrationsPerHour: 2, codeRunner: 'off', log: () => {} });
+  await new Promise((r) => s2.listen(0, '127.0.0.1', r));
+  const reg = (name, fake) => fetch(`http://127.0.0.1:${s2.address().port}/api/register`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': fake + ', 10.0.0.9' }, body: JSON.stringify({ username: name, password: 'password123' }) });
+  assert.equal((await reg('x_one', '1.1.1.1')).status, 201);
+  assert.equal((await reg('x_two', '2.2.2.2')).status, 201);
+  assert.equal((await reg('x_three', '3.3.3.3')).status, 429);
+  s2.close();
+});
+
+test('wrong current passwords on the change-password form are rate limited', async () => {
+  const c = client('10.8.0.1');
+  await c.post('/api/register', { username: 'pw_guess_target', password: 'password123' });
+  let last;
+  for (let i = 0; i < 12; i++) last = await c.post('/api/password', { currentPassword: 'guess-' + i, newPassword: 'newpassword123' });
+  assert.equal(last.status, 429);
 });

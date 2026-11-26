@@ -1777,7 +1777,20 @@ ${body}
     resetTests();
     summary.textContent = 'Running…';
     btn.disabled = true;
-    const workerSrc = `self.onmessage = function (e) {
+    // The Worker shares this site's origin, so before learner code runs, every way to reach the network or
+    // storage is removed. Code pasted from elsewhere can then not call the site's API with the learner's login.
+    const workerSrc = `(function lockDown() {
+      const names = ['fetch', 'XMLHttpRequest', 'WebSocket', 'WebSocketStream', 'EventSource', 'WebTransport', 'importScripts',
+        'indexedDB', 'caches', 'Worker', 'SharedWorker', 'BroadcastChannel', 'Request', 'FileReaderSync', 'cookieStore'];
+      for (const name of names) {
+        for (let o = self; o; o = Object.getPrototypeOf(o)) {
+          if (Object.prototype.hasOwnProperty.call(o, name)) {
+            try { Object.defineProperty(o, name, { value: undefined, writable: false, configurable: false }); } catch (err) { try { delete o[name]; } catch (err2) { /* ignore */ } }
+          }
+        }
+      }
+    })();
+    self.onmessage = function (e) {
       const { source, fn, tests, custom } = e.data;
       let target;
       try { target = new Function(source + '\\n;return typeof ' + fn + ' !== "undefined" ? ' + fn + ' : undefined;')(); }

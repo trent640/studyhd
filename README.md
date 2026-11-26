@@ -87,7 +87,7 @@ Then open http://localhost:8000.
 
 Java challenges are compiled and run by the server with the JDK (`javac` and `java` must be on the `PATH`; without them the Java tabs explain that Java is unavailable and JavaScript/SQL still work).
 
-On Linux each run is sandboxed: it gets its own user, PID, mount and network namespaces (`unshare`), with no network, the project folder, `data/` and home directory hidden behind empty tmpfs mounts, a 10-second CPU limit, a 10 MB file limit, a wall-clock timeout, and all its processes killed at the end. If the sandbox cannot be set up, the run is refused rather than run unprotected. Runs need a login and are rate limited (15 a minute per account), and code is limited to 48 KB.
+On Linux each run is sandboxed: it gets its own user, PID, mount and network namespaces (`unshare`), with no network, a read-only view of the host, the project folder, `data/`, the home directory and `/tmp` hidden, and a private 32 MB scratch folder. It has limits on CPU (10 s), memory, file size (10 MB), processes and threads, and wall-clock time, and all its processes are killed at the end. If the server runs as root, runs drop to the `nobody` user. If the sandbox cannot be set up, the run is refused rather than run unprotected. Runs need a login, one at a time per account, and are rate limited (15 a minute per account). Code is limited to 48 KB. The sandbox needs `unshare`, `prlimit` and (as root) `setpriv` from util-linux.
 
 Settings can also be given as environment variables, which take priority over `.env`. On a hosting service, use its secret or environment settings instead of a file.
 

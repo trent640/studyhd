@@ -33,12 +33,15 @@ const MIN_ADMIN_PASSWORD = 12;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_FAILS = 10;
 
-const CSP = [
-  "default-src 'self'", "script-src 'self' blob: 'unsafe-eval' 'wasm-unsafe-eval'", 'worker-src blob:',
+// Only the practice page runs learner code (JavaScript in a Worker, SQLite as WebAssembly), so only it is allowed
+// 'unsafe-eval', WebAssembly and blob: workers. Every other page gets the strict policy.
+const CSP_BASE = [
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data:", "connect-src 'self'", "form-action 'self'", "base-uri 'none'",
   "object-src 'none'", "frame-ancestors 'none'",
-].join('; ');
+];
+const CSP = ["default-src 'self'", "script-src 'self'", "worker-src 'none'", ...CSP_BASE].join('; ');
+const CSP_PRACTICE = ["default-src 'self'", "script-src 'self' blob: 'unsafe-eval' 'wasm-unsafe-eval'", 'worker-src blob:', ...CSP_BASE].join('; ');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm', '.woff2': 'font/woff2' };
 
 /* ---------- .env loading (simple KEY=VALUE lines; real environment wins) ---------- */
@@ -117,26 +120,56 @@ const { spawn, spawnSync } = require('node:child_process');
 const os = require('node:os');
 const RUN_TIMEOUT_MS = 15000;
 const RUN_OUTPUT_LIMIT = 64 * 1024;
-const RUN_SCRIPT = 'for d in "$@"; do if [ -d "$d" ]; then mount -t tmpfs none "$d" || exit 97; fi; done; cd "$SD_WORK" || exit 98; '
-  + 'javac -d . -proc:none -Xlint:none -encoding UTF-8 *.java || exit 90; '
-  + 'exec java -Xmx256m -Xss1m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=128m -Dfile.encoding=UTF-8 -Djava.io.tmpdir=. -cp . Main';
+const JVM_LIMITS = '-XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=48m -XX:CompressedClassSpaceSize=64m -XX:MaxDirectMemorySize=32m';
+// Sandbox set-up, run inside the new namespaces before any learner code:
+//  1. a small private tmpfs at /mnt becomes the working folder, and the sources are copied into it
+//     (so runs never write to the host disk, and cannot fill it);
+//  2. the project, data and home folders, plus /tmp, /var/tmp and /dev/shm, are hidden behind empty tmpfs mounts
+//     (so a run cannot see the site's files or other learners' runs);
+//  3. every other mount, including /, is made read-only (so a run cannot change the host's files).
+// Any failure stops the run (fail closed). "$@" holds the folders to hide.
+const SANDBOX_PREP = 'mount -t tmpfs -o size=32m,mode=700 none /mnt || exit 97; '
+  + 'if [ -n "$SD_WORK" ]; then cp "$SD_WORK"/*.java /mnt/ || exit 97; fi; '
+  + 'for d in "$@" /tmp /var/tmp /dev/shm; do if [ -d "$d" ]; then mount -t tmpfs -o size=1m,mode=700 none "$d" || exit 97; fi; done; '
+  + 'while read -r _ _ _ _ m _; do case "$m" in /mnt|/proc|/proc/*) ;; *) mount -o remount,bind,ro "$m" 2>/dev/null ;; esac; done < /proc/self/mountinfo; '
+  + 'mount -o remount,bind,ro / || exit 96; touch /sd-ro-check 2>/dev/null && exit 96; cd /mnt || exit 98; ';
+const COMPILE_AND_RUN = 'javac -J-Xmx256m -J-XX:+UseSerialGC -J-XX:ReservedCodeCacheSize=48m -J-XX:CompressedClassSpaceSize=64m -d . -proc:none -Xlint:none -encoding UTF-8 *.java || exit 90; '
+  + `exec java -Xmx256m -Xss1m ${JVM_LIMITS} -Dfile.encoding=UTF-8 -Djava.io.tmpdir=. -cp . Main`;
+// Unsandboxed (CODE_RUNNER=all on a host without namespaces, or the admin there): run in the work folder.
+const PLAIN_RUN = 'cd "$SD_WORK" || exit 98; ' + COMPILE_AND_RUN;
+// Kernel limits for the whole run: CPU seconds, largest file, processes/threads (stops fork bombs) and memory.
+const PRLIMIT = ['prlimit', '--cpu=10', '--fsize=10485760', '--nproc=256', '--as=2500000000'];
+const NOBODY = 65534;
 function probe(cmd, args) {
   try { return spawnSync(cmd, args, { timeout: 8000, stdio: 'ignore', env: { PATH: process.env.PATH } }).status === 0; } catch (e) { return false; }
 }
+// The command that starts a sandboxed run. When the server itself runs as root, the run also drops to the
+// unprivileged "nobody" user first, because the kernel does not apply process limits to root.
+function sandboxCommand(script, hideDirs, dropRoot) {
+  const inner = ['unshare', '-rmn', '--pid', '--fork', '--mount-proc', '--kill-child', ...PRLIMIT, 'sh', '-c', script, 'sh', ...hideDirs];
+  return dropRoot ? ['setpriv', `--reuid=${NOBODY}`, `--regid=${NOBODY}`, '--clear-groups', ...inner] : inner;
+}
 function detectRunner() {
   const java = probe('javac', ['-version']) && probe('java', ['-version']) && probe('sh', ['-c', 'true']);
-  const sandbox = java && process.platform === 'linux'
-    && probe('unshare', ['-rmn', '--pid', '--fork', '--mount-proc', '--kill-child', 'prlimit', '--cpu=5', 'sh', '-c', 'mount -t tmpfs none /mnt']);
-  return { java, sandbox };
+  const dropRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  let sandbox = false;
+  if (java && process.platform === 'linux') {
+    // Probe the full set-up (hiding, read-only remount, limits), so the sandbox is only used if every step works.
+    const [cmd, ...args] = sandboxCommand(SANDBOX_PREP + `java -Xmx256m ${JVM_LIMITS} -version`, [os.homedir()].filter((d) => d && d !== '/'), dropRoot);
+    sandbox = probe(cmd, args);
+  }
+  return { java, sandbox, dropRoot };
 }
-function runJava(files, hideDirs, sandboxed) {
+function runJava(files, hideDirs, sandboxed, dropRoot) {
   return new Promise((resolve) => {
     const work = fs.mkdtempSync(path.join(os.platform() === 'win32' ? os.tmpdir() : '/tmp', 'sd-run-'));
-    for (const [name, code] of Object.entries(files)) fs.writeFileSync(path.join(work, name), code);
-    const env = { PATH: process.env.PATH, LANG: 'C.UTF-8', HOME: work, SD_WORK: work };
-    const args = sandboxed
-      ? ['unshare', ['-rmn', '--pid', '--fork', '--mount-proc', '--kill-child', 'prlimit', '--cpu=10', '--fsize=10485760', 'sh', '-c', RUN_SCRIPT, 'sh', ...hideDirs]]
-      : ['sh', ['-c', RUN_SCRIPT, 'sh']];
+    // The sandbox only reads the sources (it copies them into its own tmpfs). If it runs as "nobody",
+    // the folder must be readable by it; it is removed as soon as the run ends.
+    if (sandboxed && dropRoot) fs.chmodSync(work, 0o755);
+    for (const [name, code] of Object.entries(files)) fs.writeFileSync(path.join(work, name), code, { mode: sandboxed && dropRoot ? 0o644 : 0o600 });
+    const env = { PATH: process.env.PATH, LANG: 'C.UTF-8', HOME: sandboxed ? '/mnt' : work, SD_WORK: work };
+    const cmd = sandboxed ? sandboxCommand(SANDBOX_PREP + COMPILE_AND_RUN, hideDirs, dropRoot) : ['sh', '-c', PLAIN_RUN, 'sh'];
+    const args = [cmd[0], cmd.slice(1)];
     const started = Date.now();
     const child = spawn(args[0], args[1], { cwd: work, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '', timedOut = false, finished = false;
@@ -151,8 +184,9 @@ function runJava(files, hideDirs, sandboxed) {
       clearTimeout(timer);
       kill();
       fs.rm(work, { recursive: true, force: true }, () => {});
-      const clean = (t) => t.split(work + path.sep).join('').split(work).join('.').replace(/^Picked up .*\n/gm, '');
+      const clean = (t) => t.split(work + path.sep).join('').split(work).join('.').split('/mnt/').join('').replace(/^Picked up .*\n/gm, '');
       const ms = Date.now() - started;
+      if (code === 96 || code === 97) stderr = 'The sandbox could not be set up, so the code was not run.';
       resolve({ compiled: code !== 90, exitCode: code, timedOut: timedOut || (code !== 0 && ms >= 9500), timeMs: ms, stdout: clean(stdout), stderr: clean(stderr) });
     };
     child.on('error', () => done(-1));
@@ -174,6 +208,7 @@ async function createApp(options = {}) {
   const runner = runPolicy === 'off' ? { java: false, sandbox: false } : (options.runnerDetect || detectRunner)();
   const runTimes = new Map(); // username -> [timestamps]
   let activeRuns = 0;
+  const runningUsers = new Set(); // one run at a time per account
   const log = options.log || ((msg) => console.log(msg));
 
   // The admin password is hashed in memory at start-up and never written anywhere.
@@ -185,7 +220,7 @@ async function createApp(options = {}) {
   } else {
     log('Admin account disabled: set ADMIN_USERNAME and ADMIN_PASSWORD to enable it.');
   }
-  if (runner.java) log(`Java runner: ${runner.sandbox ? 'sandboxed' : 'NOT sandboxed'}; policy "${runPolicy}" (${runPolicy === 'all' ? 'all logged-in users' : runner.sandbox ? 'admin and members' : 'admin only'}).`);
+  if (runner.java) log(`Java runner: ${runner.sandbox ? 'sandboxed' + (runner.dropRoot ? ' (runs as nobody)' : '') : 'NOT sandboxed'}; policy "${runPolicy}" (${runPolicy === 'all' ? 'all logged-in users' : runner.sandbox ? 'admin and members' : 'admin only'}).`);
   else log('Java runner: unavailable (' + (runPolicy === 'off' ? 'CODE_RUNNER=off' : 'no JDK found') + ').');
   const isAdminName = (name) => !!adminUsername && name.toLowerCase() === adminUsername.toLowerCase();
   const dummyHash = await hashPassword(crypto.randomBytes(16).toString('hex'));
@@ -210,7 +245,8 @@ async function createApp(options = {}) {
   sweeper.unref();
 
   function clientIp(req) {
-    if (trustProxy && req.headers['x-forwarded-for']) return String(req.headers['x-forwarded-for']).split(',')[0].trim();
+    // Use the LAST address: it is the one the trusted proxy added. Earlier entries are sent by the client and can be faked.
+    if (trustProxy && req.headers['x-forwarded-for']) return String(req.headers['x-forwarded-for']).split(',').pop().trim() || 'unknown';
     return req.socket.remoteAddress || 'unknown';
   }
   function tooManyFailures(ip, username) {
@@ -254,8 +290,8 @@ async function createApp(options = {}) {
     for (const [t, s] of sessions) if (s.username === username && t !== exceptToken) sessions.delete(t);
   }
 
-  function securityHeaders(res) {
-    res.setHeader('Content-Security-Policy', CSP);
+  function securityHeaders(res, pathname) {
+    res.setHeader('Content-Security-Policy', pathname === '/practice.html' ? CSP_PRACTICE : CSP);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -351,7 +387,10 @@ async function createApp(options = {}) {
       if (session.role === 'admin') return sendJson(res, 400, { error: 'The admin password is managed in the server settings.' });
       const user = store.get(session.username);
       const current = str(body.currentPassword), next = str(body.newPassword);
-      if (!user || !(await verifyPassword(current, user.passwordHash))) return sendJson(res, 400, { error: 'Current password is incorrect.' });
+      // Wrong current passwords count as failed logins, so a stolen session cannot be used to guess the password.
+      const ip = clientIp(req);
+      if (tooManyFailures(ip, session.username)) return sendJson(res, 429, { error: 'Too many failed attempts. Try again in 15 minutes.' });
+      if (!user || !(await verifyPassword(current, user.passwordHash))) { recordFailure(ip, session.username); return sendJson(res, 400, { error: 'Current password is incorrect.' }); }
       if (next.length < MIN_PASSWORD) return sendJson(res, 400, { error: `New password must be at least ${MIN_PASSWORD} characters.` });
       if (next.length > 200) return sendJson(res, 400, { error: 'Password is too long.' });
       if (next === current) return sendJson(res, 400, { error: 'Choose a password different from the current one.' });
@@ -386,13 +425,15 @@ async function createApp(options = {}) {
     if (total > 48 * 1024) return sendJson(res, 413, { error: 'The code is too long (48 KB maximum).' });
     const recentRuns = (runTimes.get(sess.username) || []).filter((t) => Date.now() - t < 60000);
     if (recentRuns.length >= (options.runRateLimit ?? 15)) return sendJson(res, 429, { error: 'You are running code very often. Wait a minute and try again.' });
-    if (activeRuns >= 2) return sendJson(res, 503, { error: 'The code runner is busy. Try again in a few seconds.' });
+    if (activeRuns >= (options.maxActiveRuns ?? 2)) return sendJson(res, 503, { error: 'The code runner is busy. Try again in a few seconds.' });
+    if (runningUsers.has(sess.username)) return sendJson(res, 429, { error: 'Your previous run is still going. Wait for it to finish.' });
     runTimes.set(sess.username, [...recentRuns, Date.now()]);
     activeRuns++;
+    runningUsers.add(sess.username);
     try {
       const hide = [...new Set([ROOT, path.resolve(dataDir), os.homedir()])].filter((d) => d && d !== '/' && !'/tmp'.startsWith(d));
-      return sendJson(res, 200, await runJava(files, hide, runner.sandbox));
-    } finally { activeRuns--; }
+      return sendJson(res, 200, await runJava(files, hide, runner.sandbox, runner.dropRoot));
+    } finally { activeRuns--; runningUsers.delete(sess.username); }
   }
 
   /* ---------- Forum ---------- */
@@ -510,10 +551,10 @@ async function createApp(options = {}) {
   }
 
   const server = http.createServer(async (req, res) => {
-    securityHeaders(res);
     let pathname;
     try { pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname); }
-    catch (e) { res.writeHead(400); return res.end(); }
+    catch (e) { securityHeaders(res, ''); res.writeHead(400); return res.end(); }
+    securityHeaders(res, pathname);
     try {
       if (pathname.startsWith('/api/')) return await api(req, res, pathname);
       return serveStatic(req, res, pathname);

@@ -27,7 +27,7 @@ tpl = '''<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'unsafe-eval' 'wasm-unsafe-eval'; worker-src blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; {script_csp}; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'">
 <title>{title}</title>
 <meta name="description" content="{desc}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -44,7 +44,9 @@ tpl = '''<!doctype html>
 for fn, page, title, desc in pages:
     with open(os.path.join(root, fn), 'w') as f:
         ex = extra.get(page, {})
-        f.write(tpl.format(title=title, desc=desc, page=page, dark='',
+        # Only the practice page runs learner code, so only it may use eval, WebAssembly and blob: workers.
+        script_csp = "script-src 'self' blob: 'unsafe-eval' 'wasm-unsafe-eval'; worker-src blob:" if page == 'practice' else "script-src 'self'; worker-src 'none'"
+        f.write(tpl.format(title=title, desc=desc, page=page, dark='', script_csp=script_csp,
                            extra_css=''.join('<link rel="stylesheet" href="%s">\n' % c for c in ex.get('css', [])),
                            scripts='\n'.join('<script src="%s"></script>' % s for s in ex.get('js', []) + scripts)))
 print('written', len(pages))
