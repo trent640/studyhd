@@ -414,3 +414,23 @@ test('mobile layout: menu toggles and no page scrolls sideways', async () => {
   await page.waitForURL(/practice\.html$/);
   noErrors();
 });
+
+test('security: CSP present on every page, and stored content cannot inject script', async () => {
+  for (const p of ['index.html', 'practice.html', 'notes.html']) {
+    await go(p);
+    const csp = await page.getAttribute('meta[http-equiv="Content-Security-Policy"]', 'content');
+    assert.ok(csp && /script-src 'self'/.test(csp) && /object-src 'none'/.test(csp), p + ' CSP');
+  }
+  // A note title/body with an XSS payload is stored and rendered as inert text.
+  await go('notes.html');
+  await page.click('#addNote');
+  await page.waitForSelector('#noteEditor');
+  await page.fill('#noteTitle', '<img src=x onerror=window.__xss=1>');
+  await page.fill('#noteBody', '<script>window.__xss=1<\/script>');
+  await page.click('#noteEditor button[type="submit"]');
+  await page.waitForSelector('.note-item');
+  assert.equal(await page.locator('.note-item img, #noteBody ~ * img').count(), 0);
+  assert.equal(await page.evaluate(() => window.__xss), undefined, 'payload did not execute');
+  assert.match(await page.textContent('.note-item'), /<img/);
+  noErrors();
+});
