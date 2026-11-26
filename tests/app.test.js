@@ -704,3 +704,25 @@ test('security: only the practice page may run eval, WebAssembly and workers', a
   }
   assert.match((await fetch(base + 'practice.html')).headers.get('content-security-policy'), /'unsafe-eval'/);
 });
+
+test('CV projects: filter by area and level, and open a project without a certification', async () => {
+  await go('projects.html');
+  const total = await page.evaluate(() => window.StudyDesk.PROJECTS.filter((p) => p.track === 'cv').length);
+  assert.equal(await count('#cvProjectList .project-card'), total);
+  await page.click('[aria-label="Filter by area"] >> text=Java + AI');
+  await page.waitForURL(/area=Java/);
+  const ai = await count('#cvProjectList .project-card');
+  assert.ok(ai >= 4 && ai < total);
+  await page.click('[aria-label="Filter by level"] >> text=Advanced');
+  await page.waitForURL(/level=Advanced/);
+  assert.match(await page.textContent('#cvCount'), /Showing \d+ of \d+/);
+  assert.ok(await count('#cvProjectList .project-card') <= ai);
+  await go('projects.html?area=<script>&level=nope');
+  assert.equal(await count('#cvProjectList .project-card'), total, 'unknown filters are ignored');
+  await go('projects.html?p=ai-study-buddy');
+  assert.match(await page.textContent('.crumbs'), /CV projects/);
+  assert.match(await page.textContent('.why-card'), /Spring/);
+  assert.match(await page.textContent('#projProgress'), /automated checks/);
+  assert.ok(await count('.link-list .resource-link') >= 3, 'links to the modules it practises');
+  noErrors();
+});

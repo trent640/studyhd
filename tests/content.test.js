@@ -41,6 +41,24 @@ test('path, certifications and projects reference real items and cover every mod
   for (const p of SD_PROJECTS) assert.ok(p.stories.length >= 5 && p.cv && p.stretch.length, p.id);
 });
 
+test('CV projects: at least 25, each tagged with real modules, an area, a level and why employers value it', () => {
+  const cv = SD_PROJECTS.filter((p) => p.track === 'cv');
+  assert.ok(cv.length >= 25, 'found ' + cv.length);
+  assert.equal(new Set(SD_PROJECTS.map((p) => p.id)).size, SD_PROJECTS.length, 'project ids are unique');
+  const certProjects = new Set(SD_CERTS.flatMap((c) => c.projects));
+  for (const p of cv) {
+    assert.ok(!certProjects.has(p.id) && !p.cert, p.id + ' is optional, not a certification requirement');
+    assert.ok(window.SD_PROJECT_AREAS.includes(p.area), p.id + ' area');
+    assert.ok(['Beginner', 'Intermediate', 'Advanced'].includes(p.level), p.id + ' level');
+    assert.ok(p.modules.length && p.modules.every((m) => ids.has(m)), p.id + ' modules');
+    assert.ok(p.why && p.summary && p.stack && p.hours && p.stories.length >= 6, p.id + ' fields');
+  }
+  // Every area and every level has at least one project, and the Java + AI area is well covered.
+  for (const a of window.SD_PROJECT_AREAS) assert.ok(cv.some((p) => p.area === a), 'area ' + a);
+  for (const l of ['Beginner', 'Intermediate', 'Advanced']) assert.ok(cv.some((p) => p.level === l), 'level ' + l);
+  assert.ok(cv.filter((p) => p.area === 'Java + AI').length >= 4);
+});
+
 test('job paths reference real certifications and cover the two careers', () => {
   const certIds = new Set(SD_CERTS.map((c) => c.id));
   assert.ok(SD_JOBPATHS.length >= 2, 'at least two job paths');

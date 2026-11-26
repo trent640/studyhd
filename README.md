@@ -20,6 +20,7 @@ It uses plain HTML, CSS and JavaScript (no build step) with a small Node server 
 - **30 coding challenges:** 19 JavaScript (17 of them also solvable in Java), 3 HTML/CSS, 4 Java-only (bank account, gradebook, min-heap, validation) and 4 SQL. Each has hints and a reference solution that you can reveal.
 - **Java "predict the output" checks**, which can now also be run for real.
 - **12 portfolio projects** written as user stories, each with a CV bullet. Seven have **automated checks**: linked challenges that test the project's core logic, which must pass before the project can be marked done.
+- **27 optional CV projects** on the Projects page, filterable by area and level (beginner to advanced). Each lists the modules it practises, why employers value it, user stories, stretch goals and a ready-to-use CV bullet. They include Java + AI apps with Spring AI (an AI study buddy, a RAG "ask the docs" assistant, an AI CV reviewer, AI ticket triage), Spring Boot APIs and microservices, React/TypeScript apps, testing, MySQL tuning, data analysis with Irish open data, Kotlin Android, security and bug bounty, and team/open-source projects.
 - **A roadmap** that combines three influences:
   - W3Schools: a topic menu, big Previous/Next buttons and "Try it Yourself"
   - freeCodeCamp: certification blocks and numbered step rows

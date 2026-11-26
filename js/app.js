@@ -1820,27 +1820,50 @@ ${body}
   }
 
   /* ================= Projects ================= */
+  const PROJECT_AREAS = window.SD_PROJECT_AREAS || [];
+  const PROJECT_LEVELS = ['Beginner', 'Intermediate', 'Advanced'];
+  function projectCard(p) {
+    const n = ProjectProgress.count(p);
+    return `<a class="card project-card" href="projects.html?p=${p.id}"><div class="kicker">${p.level ? `<span class="level-tag level-${esc(p.level.toLowerCase())}">${esc(p.level)}</span> ` : ''}${esc(p.stack)} · ${esc(p.hours)}</div><h3>${ProjectProgress.complete(p) ? '✓ ' : ''}${esc(p.title)}</h3><p>${esc(p.summary)}</p>
+      <div class="progress-line" style="margin:0"><span class="progress-text">${n}/${p.stories.length} user stories</span>${bar(Math.round((n / p.stories.length) * 100), p.title)}</div></a>`;
+  }
   function renderProjects() {
     const id = params.get('p');
     if (id) return renderProject(id);
+    const area = PROJECT_AREAS.includes(params.get('area')) ? params.get('area') : '';
+    const level = PROJECT_LEVELS.includes(params.get('level')) ? params.get('level') : '';
+    const cvProjects = PROJECTS.filter((p) => p.track === 'cv');
+    const shown = cvProjects.filter((p) => (!area || p.area === area) && (!level || p.level === level));
+    const link = (a, l) => { const q = new URLSearchParams(); if (a) q.set('area', a); if (l) q.set('level', l); const qs = q.toString(); return 'projects.html' + (qs ? '?' + qs : '') + '#cv-projects'; };
+    const chip = (label, href, active) => `<a class="chip light${active ? ' active' : ''}" href="${esc(href)}"${active ? ' aria-current="true"' : ''}>${esc(label)}</a>`;
     setPage(`<div class="page"><div class="container">
       ${pageHead({ crumbs: [['index.html', 'Home'], [null, 'Projects']], title: 'Portfolio projects',
-        desc: 'Each certification ends with projects described as user stories, like a real ticket. Tick each story when your project meets it. These are the projects to link on your CV and GitHub.' })}
-      ${CERTS.map((c) => `<div class="h-section">${esc(c.title)}</div><div class="grid-2">${c.projects.map(projectById).map((p) => {
-        const n = ProjectProgress.count(p);
-        return `<a class="card project-card" href="projects.html?p=${p.id}"><div class="kicker">${esc(p.stack)} · ${esc(p.hours)}</div><h3>${ProjectProgress.complete(p) ? '✓ ' : ''}${esc(p.title)}</h3><p>${esc(p.summary)}</p>
-          <div class="progress-line" style="margin:0"><span class="progress-text">${n}/${p.stories.length} user stories</span>${bar(Math.round((n / p.stories.length) * 100), p.title)}</div></a>`;
-      }).join('')}</div>`).join('')}
+        desc: 'Projects described as user stories, like a real ticket. Tick each story when your project meets it. Each certification needs its own projects; the CV projects below are optional extras to make your CV stand out.' })}
+      <nav class="path-switch" aria-label="Jump to"><span>Jump to:</span><a class="chip light" href="#cert-projects">Certification projects</a><a class="chip light" href="#cv-projects">CV projects (${cvProjects.length})</a></nav>
+      <h2 class="section-title" id="cert-projects">Certification projects</h2>
+      ${CERTS.map((c) => `<div class="h-section">${esc(c.title)}</div><div class="grid-2">${c.projects.map(projectById).map(projectCard).join('')}</div>`).join('')}
+      <h2 class="section-title" id="cv-projects" tabindex="-1">CV projects</h2>
+      <p class="hint-text">Optional projects that employers like to see, from beginner to advanced. Pick one that interests you; one finished project is worth more than three started ones.</p>
+      <div class="path-switch" role="group" aria-label="Filter by area"><span>Area:</span>${chip('All', link('', level), !area)}${PROJECT_AREAS.filter((a) => cvProjects.some((p) => p.area === a)).map((a) => chip(a, link(a, level), a === area)).join('')}</div>
+      <div class="path-switch" role="group" aria-label="Filter by level"><span>Level:</span>${chip('All levels', link(area, ''), !level)}${PROJECT_LEVELS.map((l) => chip(l, link(area, l), l === level)).join('')}</div>
+      <p class="hint-text" id="cvCount" aria-live="polite">Showing ${shown.length} of ${cvProjects.length} CV projects.</p>
+      <div class="grid-2" id="cvProjectList">${shown.map(projectCard).join('') || '<p class="hint-text">No projects match these filters.</p>'}</div>
     </div></div>`);
+    // The page is drawn after loading, so jump to #cv-projects (used by the filters) ourselves.
+    const target = location.hash === '#cv-projects' && $('#cv-projects');
+    if (target) { target.scrollIntoView(); target.focus({ preventScroll: true }); }
   }
   function renderProject(id) {
     const p = projectById(id);
     if (!p) return renderNotFound();
     const cert = CERTS.find((c) => c.id === p.cert);
+    const skillModules = (p.modules || (cert ? cert.modules : [])).map(byId).filter(Boolean);
     const state = ProjectProgress.get(p.id);
     document.title = p.title + ' · Projects · Study Desk';
     setPage(`<div class="page"><div class="container narrow">
-      ${pageHead({ crumbs: [['projects.html', 'Projects'], [null, cert.title]], title: p.title, desc: esc(p.summary) + `<br><b>Stack:</b> ${esc(p.stack)} · <b>Time:</b> ${esc(p.hours)}`, extra: `<div class="progress-line" id="projProgress"></div>` })}
+      ${pageHead({ crumbs: [['projects.html', 'Projects'], [null, cert ? cert.title : 'CV projects']], title: p.title,
+        desc: esc(p.summary) + `<br><b>Stack:</b> ${esc(p.stack)} · <b>Time:</b> ${esc(p.hours)}${p.level ? ` · <b>Level:</b> ${esc(p.level)}` : ''}`, extra: `<div class="progress-line" id="projProgress"></div>` })}
+      ${p.why ? `<div class="card readable why-card"><h2>Why employers like it</h2><p>${esc(p.why)}</p></div>` : ''}
       ${(p.checks || []).length ? `<div class="card readable project-checks">
         <h2>Automated checks</h2>
         <p class="hint-text">The core code of this project, checked by tests in the editor. Write your own solution; it passes when the tests pass.</p>
@@ -1858,7 +1881,7 @@ ${body}
         <p class="cv-line" id="cvLine">${esc(p.cv)}</p>
         <button class="btn small" type="button" id="copyCv">Copy</button>
         <h2 style="margin-top:20px">Learn the skills</h2>
-        <div class="link-list">${cert.modules.map(byId).map((m) => `<a class="resource-link" href="${lessonUrl(m.id, 0)}"><span class="tag" style="background:#fef9c3;color:#713f12">Module</span>${esc(m.title)}<span class="out">→</span></a>`).join('')}</div>
+        <div class="link-list">${skillModules.map((m) => `<a class="resource-link" href="${lessonUrl(m.id, 0)}"><span class="tag" style="background:#fef9c3;color:#713f12">Module</span>${esc(m.title)}<span class="out">→</span></a>`).join('')}</div>
       </div>
     </div></div>`);
     const paint = () => {
