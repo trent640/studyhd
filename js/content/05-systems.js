@@ -401,7 +401,7 @@ Next step: compare with average earnings by county.`,
 });
 
 M.push({
-  id: 'ai-engineering', title: 'AI-assisted development with Spring AI', cat: 'Java', code: '14 · JAVA + AI',
+  id: 'ai-engineering', title: 'Spring Boot + Spring AI', cat: 'Java', code: '14 · JAVA + AI',
   desc: 'Build a Spring Boot study assistant that retrieves course notes and calls a model through Spring AI, with tests and guardrails.',
   outcome: 'Build a retrieval-backed assistant that cites its sources, handles failures and never presents a guess as a fact.',
   jobSkills: ['AI-assisted development and model APIs', 'Java and Spring Boot'],

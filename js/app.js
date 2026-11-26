@@ -27,7 +27,7 @@
   /* ================= Shared page chrome ================= */
   const NAV = [
     ['learn', 'learn.html', 'Learn'], ['roadmap', 'roadmap.html', 'Roadmap'], ['practice', 'practice.html', 'Practice'],
-    ['projects', 'projects.html', 'Projects'], ['interview', 'interview.html', 'Interview'], ['career', 'career.html', 'Career'],
+    ['projects', 'projects.html', 'Projects'], ['tasks', 'tasks.html', 'Tasks'], ['interview', 'interview.html', 'Interview'], ['career', 'career.html', 'Career'],
     ['community', 'community.html', 'Community'], ['notes', 'notes.html', 'Notes'],
   ];
   document.body.insertAdjacentHTML('afterbegin', `
@@ -39,13 +39,14 @@
       ${NAV.map(([k, href, label]) => `<a href="${href}" data-nav="${k}">${label}</a>`).join('')}
     </nav>
     <div class="nav-right" id="navRight"></div>
+    <button class="icon-btn" type="button" data-action="focus" aria-label="Pomodoro timer" title="Pomodoro timer">⏱</button>
     <button class="icon-btn" id="settingsBtn" type="button" aria-label="Comfort settings" title="Comfort settings">⚙</button>
     <button class="menu-toggle" id="menuToggle" aria-label="Open menu" aria-expanded="false" aria-controls="navLinks">☰</button>
   </div>
 </header>`);
   document.body.insertAdjacentHTML('beforeend', `
 <footer class="footer">
-  <div class="container">Study Desk keeps your progress, notes and discussions in this browser only. Accounts are local to this device. Use ⚙ to change text size, fonts, colours, motion and break reminders.</div>
+  <div class="container">Your progress, notes and tasks are saved in this browser. Accounts and the community forum are kept on the Study Desk server. Use ⚙ to change text size, fonts, colours, view, motion and break reminders, and ⏱ for a Pomodoro timer.</div>
 </footer>
 <div class="drawer-backdrop" id="drawerBackdrop"></div>
 <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" aria-hidden="true">
@@ -111,9 +112,10 @@
   </div>
 </div>
 <div class="focus-overlay" id="focusOverlay" role="dialog" aria-modal="true" aria-labelledby="focusLabel">
-  <div class="kicker" id="focusLabel" style="color:#9b9ba6">Focus mode</div>
+  <div class="kicker" id="focusLabel" style="color:#9b9ba6">Pomodoro: focus</div>
   <div class="timer" id="focusTimer">25:00</div>
   <p id="focusText">One task. Everything else can wait. Press <kbd>Esc</kbd> to leave.</p>
+  <p id="focusCount" class="focus-count"></p>
   <div class="btn-row">
     <button class="btn yellow" id="focusStart">Start</button>
     <button class="btn" id="focusReset">Reset</button>
@@ -216,7 +218,7 @@
       const was = p[key];
       if (status === 'pending') delete p[key]; else p[key] = status;
       store.set(userKey('progress'), p);
-      if (status === 'done' && was !== 'done') Daily.add();
+      if (status === 'done' && was !== 'done') { Daily.add(); Points.award('step:' + key, 10); }
     },
     moduleStats(m) {
       const p = this.all();
@@ -251,6 +253,66 @@
   const Daily = {
     count() { return (store.get(userKey('daily'), {})[today()]) || 0; },
     add() { const d = store.get(userKey('daily'), {}); d[today()] = (d[today()] || 0) + 1; store.set(userKey('daily'), d); },
+  };
+  const Pomodoros = {
+    count() { return (store.get(userKey('pomodoros'), {})[today()]) || 0; },
+    total() { return Object.values(store.get(userKey('pomodoros'), {})).reduce((a, b) => a + b, 0); },
+    add() { const d = store.get(userKey('pomodoros'), {}); d[today()] = (d[today()] || 0) + 1; store.set(userKey('pomodoros'), d); },
+  };
+  // Points: each achievement is awarded once (keyed), so nothing can be lost and nothing double-counts.
+  const Points = {
+    all() { return store.get(userKey('points'), {}); },
+    total() { return Object.values(this.all()).reduce((a, b) => a + b, 0); },
+    has(key) { return key in this.all(); },
+    award(key, pts) {
+      const p = this.all();
+      if (key in p) return false;
+      p[key] = pts;
+      store.set(userKey('points'), p);
+      if (Settings.get().showPoints) toast('+' + pts + ' points');
+      return true;
+    },
+    count(prefix) { return Object.keys(this.all()).filter((k) => k.startsWith(prefix)).length; },
+  };
+  function badges() {
+    const stepsDone = Points.count('step:');
+    const solved = Points.count('challenge:');
+    const modulesDone = MODULES.filter((m) => { const s = Progress.moduleStats(m); return s.done === s.total; }).length;
+    const certsDone = CERTS.filter((c) => certStats(c).complete).length;
+    return [
+      { id: 'first-step', icon: '🌱', name: 'First step', desc: 'Complete one step', earned: stepsDone >= 1 },
+      { id: 'ten-steps', icon: '🪴', name: 'Ten steps', desc: 'Complete 10 steps', earned: stepsDone >= 10 },
+      { id: 'fifty-steps', icon: '🌳', name: 'Fifty steps', desc: 'Complete 50 steps', earned: stepsDone >= 50 },
+      { id: 'first-module', icon: '📘', name: 'Module done', desc: 'Finish every step in a module', earned: modulesDone >= 1 },
+      { id: 'first-challenge', icon: '🧩', name: 'Problem solver', desc: 'Solve a coding challenge', earned: solved >= 1 },
+      { id: 'five-challenges', icon: '🏅', name: 'Five solved', desc: 'Solve 5 coding challenges', earned: solved >= 5 },
+      { id: 'quiz-ace', icon: '🎯', name: 'Quiz ace', desc: 'Score 100% on a final quiz', earned: Points.count('quiz-perfect:') >= 1 },
+      { id: 'listener', icon: '🎧', name: 'Listener', desc: 'Finish a lecture', earned: Points.count('lecture:') >= 1 },
+      { id: 'focused', icon: '⏱', name: 'Focused', desc: 'Complete a Pomodoro', earned: Pomodoros.total() >= 1 },
+      { id: 'builder', icon: '🛠', name: 'Builder', desc: 'Complete a project', earned: Points.count('project:') >= 1 },
+      { id: 'certified', icon: '🎓', name: 'Certified', desc: 'Complete a certification', earned: certsDone >= 1 },
+    ];
+  }
+  const Tasks = {
+    list() { return store.get(userKey('tasks'), []); },
+    save(list) { store.set(userKey('tasks'), list); },
+    add(text, link) {
+      text = String(text || '').trim().slice(0, 200);
+      if (!text) return null;
+      const list = this.list();
+      if (link && list.some((t) => t.link === link && !t.done)) return null;
+      const t = { id: uid(), text, link: link || '', done: false, createdAt: Date.now() };
+      list.push(t);
+      this.save(list);
+      return t;
+    },
+    toggle(id) { const list = this.list(); const t = list.find((x) => x.id === id); if (t) { t.done = !t.done; t.doneAt = t.done ? Date.now() : null; this.save(list); } },
+    remove(id) { this.save(this.list().filter((x) => x.id !== id)); },
+    move(id, dir) {
+      const list = this.list(); const i = list.findIndex((x) => x.id === id); const j = i + dir;
+      if (i < 0 || j < 0 || j >= list.length) return;
+      [list[i], list[j]] = [list[j], list[i]]; this.save(list);
+    },
   };
   const ProjectProgress = {
     get(pid) { return store.get(userKey('projects'), {})[pid] || { stories: {}, repo: '' }; },
@@ -293,7 +355,18 @@
 
   /* ================= Comfort settings ================= */
   const SETTINGS_KEY = 'sd:settings';
-  const DEFAULT_SETTINGS = { textSize: 'm', font: 'default', spacing: 'normal', theme: 'light', calm: false, reduceMotion: false, breakMinutes: 25, dailyGoal: 3, showTimes: true };
+  const DEFAULT_SETTINGS = { textSize: 'm', font: 'default', spacing: 'normal', theme: 'light', calm: false, reduceMotion: false, breakMinutes: 25, dailyGoal: 3, showTimes: true, view: 'detailed', focusMinutes: 25, showPoints: true };
+  // OpenDyslexic is only downloaded when someone chooses it.
+  function loadDyslexicFont() {
+    if (document.getElementById('font-opendyslexic')) return;
+    ['index.css', '700.css'].forEach((f, i) => {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      if (i === 0) link.id = 'font-opendyslexic';
+      link.href = 'https://cdn.jsdelivr.net/npm/@fontsource/opendyslexic@5.3.0/' + f;
+      document.head.appendChild(link);
+    });
+  }
   const Settings = {
     get() { return { ...DEFAULT_SETTINGS, ...store.get(SETTINGS_KEY, {}) }; },
     set(patch) { store.set(SETTINGS_KEY, { ...this.get(), ...patch }); applySettings(); },
@@ -304,8 +377,14 @@
     ['text-l', 'text-xl', 'text-s'].forEach((c) => b.classList.remove(c));
     if (s.textSize !== 'm') b.classList.add('text-' + s.textSize);
     b.classList.toggle('font-readable', s.font === 'readable');
+    b.classList.toggle('font-lexend', s.font === 'lexend');
+    b.classList.toggle('font-dyslexic', s.font === 'dyslexic');
+    if (s.font === 'dyslexic') loadDyslexicFont();
     b.classList.toggle('spacing-relaxed', s.spacing === 'relaxed');
     b.classList.toggle('theme-dark', s.theme === 'dark');
+    b.classList.toggle('theme-contrast', s.theme === 'contrast');
+    b.classList.toggle('view-simple', s.view === 'simple');
+    b.classList.toggle('hide-points', !s.showPoints);
     b.classList.toggle('calm', !!s.calm);
     b.classList.toggle('reduce-motion', !!s.reduceMotion);
     b.classList.toggle('hide-times', !s.showTimes);
@@ -318,16 +397,22 @@
     $('#settingsForm').innerHTML = `
       <fieldset><legend>Text size (lessons and reading areas)</legend><div class="opt-row">
         ${radio('textSize', 's', 'Small')}${radio('textSize', 'm', 'Medium')}${radio('textSize', 'l', 'Large')}${radio('textSize', 'xl', 'Extra large')}</div></fieldset>
+      <fieldset><legend>View</legend><div class="opt-row">
+        ${radio('view', 'simple', 'Simple', 'One part of a lesson at a time, fewer extras on screen')}${radio('view', 'detailed', 'Detailed', 'Everything on the page at once')}</div></fieldset>
       <fieldset><legend>Font</legend><div class="opt-row">
-        ${radio('font', 'default', 'Standard', 'Inter')}${radio('font', 'readable', 'Extra readable', 'Atkinson Hyperlegible: clearer letter shapes')}</div></fieldset>
+        ${radio('font', 'default', 'Standard', 'Inter')}${radio('font', 'readable', 'Extra readable', 'Atkinson Hyperlegible: clearer letter shapes')}${radio('font', 'lexend', 'Lexend', 'Designed to reduce visual stress when reading')}${radio('font', 'dyslexic', 'OpenDyslexic', 'Dyslexia-friendly, weighted letters')}</div></fieldset>
       <fieldset><legend>Line spacing</legend><div class="opt-row">
         ${radio('spacing', 'normal', 'Normal')}${radio('spacing', 'relaxed', 'Relaxed', 'More space between lines')}</div></fieldset>
       <fieldset><legend>Colours</legend><div class="opt-row">
-        ${radio('theme', 'light', 'Light')}${radio('theme', 'dark', 'Dark', 'Less glare')}</div>
+        ${radio('theme', 'light', 'Light')}${radio('theme', 'dark', 'Dark', 'Less glare')}${radio('theme', 'contrast', 'High contrast', 'Black and white, strongest outlines')}</div>
         ${toggle('calm', 'Calm colours', 'Softer yellows and lower contrast for less visual intensity')}</fieldset>
       <fieldset><legend>Movement and time</legend>
         ${toggle('reduceMotion', 'Reduce motion', 'Turn off slides, fades and animations')}
-        ${toggle('showTimes', 'Show time estimates', 'Show how long each step usually takes')}</fieldset>
+        ${toggle('showTimes', 'Show time estimates', 'Show how long each step usually takes')}
+        ${toggle('showPoints', 'Show points and badges', 'Turn off if scores feel stressful; your progress is still saved')}</fieldset>
+      <fieldset><legend>Pomodoro focus length</legend><div class="opt-row">
+        ${radio('focusMinutes', 15, '15 min')}${radio('focusMinutes', 25, '25 min')}${radio('focusMinutes', 45, '45 min')}</div>
+        <p class="hint-text">Each focus session is followed by a 5-minute break.</p></fieldset>
       <fieldset><legend>Break reminders</legend><div class="opt-row">
         ${radio('breakMinutes', 0, 'Off')}${radio('breakMinutes', 25, 'Every 25 min')}${radio('breakMinutes', 45, 'Every 45 min')}${radio('breakMinutes', 60, 'Every 60 min')}</div></fieldset>
       <fieldset><legend>Daily goal</legend><div class="opt-row">
@@ -338,9 +423,11 @@
   $('#settingsForm').addEventListener('change', (e) => {
     const t = e.target;
     let v = t.type === 'checkbox' ? t.checked : t.value;
-    if (t.name === 'breakMinutes' || t.name === 'dailyGoal') v = Number(v);
+    if (t.name === 'breakMinutes' || t.name === 'dailyGoal' || t.name === 'focusMinutes') v = Number(v);
     Settings.set({ [t.name]: v });
     if (t.name === 'breakMinutes') BreakTimer.restart();
+    if (t.name === 'focusMinutes') resetFocusLength();
+    if (t.name === 'view' || t.name === 'showPoints' || t.name === 'dailyGoal') route();
   });
   $('#settingsForm').addEventListener('click', (e) => {
     if (e.target.id === 'settingsReset') { store.set(SETTINGS_KEY, {}); applySettings(); renderSettingsForm(); BreakTimer.restart(); toast('Settings reset.'); }
@@ -473,49 +560,126 @@
       <a class="btn yellow big" href="${lessonUrl(n.m.id, n.i)}" id="continueBtn">Continue →</a>
     </div>`;
   }
+  function taskItem(t, compact) {
+    const label = t.link ? `<a href="${esc(t.link)}">${esc(t.text)}</a>` : esc(t.text);
+    return `<li class="task${t.done ? ' done' : ''}" data-task="${esc(t.id)}">
+      <input type="checkbox" id="task-${esc(t.id)}" ${t.done ? 'checked' : ''} aria-label="Done: ${esc(t.text)}">
+      <span class="task-text">${label}</span>
+      ${compact ? '' : `<span class="task-tools"><button type="button" class="icon-mini" data-move="-1" aria-label="Move up">↑</button><button type="button" class="icon-mini" data-move="1" aria-label="Move down">↓</button><button type="button" class="icon-mini danger" data-remove aria-label="Delete task">×</button></span>`}
+    </li>`;
+  }
+  function wireTaskList(root, rerender) {
+    root.addEventListener('change', (e) => {
+      const li = e.target.closest('[data-task]');
+      if (li && e.target.type === 'checkbox') { Tasks.toggle(li.dataset.task); rerender(); }
+    });
+    root.addEventListener('click', (e) => {
+      const li = e.target.closest('[data-task]');
+      if (!li) return;
+      if (e.target.closest('[data-remove]')) { Tasks.remove(li.dataset.task); rerender(); }
+      const mv = e.target.closest('[data-move]');
+      if (mv) { Tasks.move(li.dataset.task, Number(mv.dataset.move)); rerender(); }
+    });
+  }
+  function energyLinks() {
+    const n = Progress.next();
+    const started = MODULES.filter((m) => { const st = Progress.moduleStats(m); return st.done + st.learning > 0; });
+    const lastMod = started[started.length - 1];
+    const unsolved = CHALLENGES.find((c) => !Solved.has(c.id)) || CHALLENGES[0];
+    const low = lastMod ? { href: `lesson.html?m=${lastMod.id}&review=1`, text: `Review ${lastMod.title}: a short quiz` } : { href: 'practice.html?c=fizzbuzz', text: 'A 10-minute warm-up challenge' };
+    const mid = n ? { href: lessonUrl(n.m.id, n.i), text: `Next step: ${n.m.lessons[n.i].title}` } : { href: 'projects.html', text: 'Work on a project' };
+    const high = { href: `practice.html?c=${unsolved.id}`, text: `Next step, then try "${unsolved.title}"` };
+    return [['low', '🔋', 'Low energy', '5–10 minutes', low], ['mid', '🔋🔋', 'Some energy', 'about 15 minutes', mid], ['high', '🔋🔋🔋', 'Lots of energy', '30+ minutes', high]];
+  }
   function renderHome() {
     const ov = Progress.overall();
     const tiles = MODULES.filter((m) => homeFilter === 'All' || m.cat === homeFilter).map(moduleTile).join('');
-    setPage(`<section class="home"><div class="container">
-      <div class="hero">
-        <h1>Learn computer science<br>one small step at a time</h1>
-        <p>A calm, structured study space built for <b>ADHD and autistic learners</b>. ${MODULES.length} modules and ${ov.total} short steps, shaped by what Irish software internship job posts ask for.</p>
-        <div class="hero-cta">
-          <a class="btn yellow" href="learn.html">Start learning →</a>
-          <a class="btn" href="roadmap.html">See the roadmap</a>
-          <button class="btn" type="button" data-action="focus">Focus mode</button>
+    const openTasks = Tasks.list().filter((t) => !t.done);
+    const earned = badges().filter((x) => x.earned);
+    const user = Auth.current();
+    setPage(`<section class="home desk"><div class="container">
+      <div class="desk-head">
+        <div>
+          <p class="kicker">Your study desk${user ? ' · ' + esc(user.username) : ''}</p>
+          <h1>Pick one small thing. That is enough to start.</h1>
+          <p class="lede">Computer science in short, predictable steps, made for ADHD and autistic learners. ${MODULES.length} modules, ${ov.total} steps. You choose the pace.</p>
         </div>
       </div>
-      ${continueCard(true)}
-      <ul class="calm-list" aria-label="How Study Desk helps">
-        <li><b>Small steps.</b> Each step takes about 5–15 minutes and has one clear goal.</li>
-        <li><b>Same layout every time.</b> Goal, example, code, try it, check yourself.</li>
-        <li><b>You control the senses.</b> Text size, fonts, colours, motion and breaks in ⚙.</li>
-      </ul>
+      <div class="desk-grid">
+        ${continueCard(false)}
+        <section class="card today" aria-labelledby="todayTitle">
+          <div class="today-head"><h2 id="todayTitle">Today</h2><a href="tasks.html" class="small-link">All tasks →</a></div>
+          <form id="quickTaskForm" class="quick-task"><label class="sr-only" for="quickTask">Add a task</label><input class="input" id="quickTask" maxlength="200" placeholder="Add a small task…"><button class="btn small" type="submit">Add</button></form>
+          <ul class="task-list" id="todayTasks">${openTasks.slice(0, 4).map((t) => taskItem(t, true)).join('') || '<li class="task-empty">No tasks yet. Add one small, specific task.</li>'}</ul>
+          <div class="today-foot"><button class="btn small" type="button" data-action="focus">⏱ Start a Pomodoro</button><span class="hint-text" style="margin:0">${Pomodoros.count() ? `${Pomodoros.count()} done today` : 'None yet today'}</span></div>
+        </section>
+      </div>
+      <section class="energy" aria-labelledby="energyTitle">
+        <h2 id="energyTitle">How much energy do you have right now?</h2>
+        <div class="energy-grid">${energyLinks().map(([k, icon, name, time, link]) => `<a class="energy-card ${k}" href="${link.href}"><span class="energy-icon" aria-hidden="true">${icon}</span><b>${name}</b><small>${time}</small><span>${esc(link.text)}</span></a>`).join('')}</div>
+      </section>
+      <section class="card progress-card points-only" aria-labelledby="progTitle">
+        <div class="today-head"><h2 id="progTitle">Your progress</h2><span class="points-total">${Points.total()} points</span></div>
+        <p class="hint-text">${ov.done} steps done · ${CHALLENGES.filter((c) => Solved.has(c.id)).length} challenges solved · ${Pomodoros.total()} Pomodoros. Points are never taken away.</p>
+        <ul class="badge-row">${badges().map((x) => `<li class="badge${x.earned ? ' earned' : ''}" title="${esc(x.desc)}"><span aria-hidden="true">${x.icon}</span><b>${esc(x.name)}</b><small>${x.earned ? 'Earned' : esc(x.desc)}</small></li>`).join('')}</ul>
+        <span class="sr-only">${earned.length} of ${badges().length} badges earned</span>
+      </section>
       <div class="section-label"><span>Job paths</span></div>
-      <p class="paths-intro">Follow a curated route to a specific career. Each path is a sequence of certifications.</p>
+      <p class="paths-intro">Follow a route to a specific career. Each path is a sequence of certifications.</p>
       <div class="tile-grid">${JOBPATHS.map((jp) => {
         const certs = jp.certs.map(certById).filter(Boolean);
-        const o = certs.reduce((a, c) => { const s = certStats(c); a.done += s.stepsDone + s.projDone; a.total += s.total + s.projTotal; return a; }, { done: 0, total: 0 });
+        const o = certs.reduce((acc, c) => { const st = certStats(c); acc.done += st.stepsDone + st.projDone; acc.total += st.total + st.projTotal; return acc; }, { done: 0, total: 0 });
         const pct = o.total ? Math.round((o.done / o.total) * 100) : 0;
         return `<a class="tile path-tile" href="learn.html?path=${jp.id}"><span>${esc(jp.title)}<small>${certs.length} certifications · ${esc(jp.desc)}</small></span><span class="tile-tag">${pct}%</span><i class="tile-bar" style="width:${pct}%"></i></a>`;
       }).join('')}</div>
       <div class="section-label"><span>Certifications</span></div>
-      <div class="tile-grid">${CERTS.map((c) => { const s = certStats(c); return `<a class="tile cert-tile" href="learn.html#cert-${c.id}"><span>${esc(c.title)}<small>${c.modules.length} modules · ${s.total} steps · ${c.projects.length} project${c.projects.length > 1 ? 's' : ''}</small></span>${s.complete ? '<span class="tile-tag done">✓ Complete</span>' : `<span class="tile-tag">${s.pct}%</span>`}<i class="tile-bar" style="width:${s.pct}%"></i></a>`; }).join('')}</div>
-      <div class="section-label"><span>Module roadmaps</span></div>
-      <div class="chip-row" role="group" aria-label="Filter modules">${CATEGORIES.map((c) => `<button type="button" class="chip${c === homeFilter ? ' active' : ''}" data-filter="${c}" aria-pressed="${c === homeFilter}">${c}</button>`).join('')}</div>
-      <div class="tile-grid" id="moduleTiles">${tiles || '<p style="color:var(--night-mute)">No modules in this category.</p>'}</div>
+      <div class="tile-grid">${CERTS.map((c) => { const st = certStats(c); return `<a class="tile cert-tile" href="learn.html#cert-${c.id}"><span>${esc(c.title)}<small>${c.modules.length} modules · ${st.total} steps · ${c.projects.length} project${c.projects.length > 1 ? 's' : ''}</small></span>${st.complete ? '<span class="tile-tag done">✓ Complete</span>' : `<span class="tile-tag">${st.pct}%</span>`}<i class="tile-bar" style="width:${st.pct}%"></i></a>`; }).join('')}</div>
+      <div class="detail-only">
+        <div class="section-label"><span>Module roadmaps</span></div>
+        <div class="chip-row" role="group" aria-label="Filter modules">${CATEGORIES.map((c) => `<button type="button" class="chip${c === homeFilter ? ' active' : ''}" data-filter="${c}" aria-pressed="${c === homeFilter}">${c}</button>`).join('')}</div>
+        <div class="tile-grid" id="moduleTiles">${tiles || '<p class="hint-text">No modules in this category.</p>'}</div>
+      </div>
       <div class="section-label"><span>Practice and career</span></div>
       <div class="tile-grid">
-        <a class="tile" href="practice.html"><span>Coding challenges<small>${CHALLENGES.length} assessment-style problems with tests</small></span><span class="tile-tag">Practice</span></a>
+        <a class="tile" href="practice.html"><span>Coding challenges<small>${CHALLENGES.length} problems with instant feedback</small></span><span class="tile-tag">Practice</span></a>
         <a class="tile" href="projects.html"><span>Portfolio projects<small>${PROJECTS.length} projects with user stories</small></span><span class="tile-tag">Build</span></a>
-        <a class="tile" href="interview.html"><span>Interview prep<small>Technical and STAR behavioural prompts</small></span><span class="tile-tag">Career</span></a>
-        <a class="tile" href="career.html"><span>Irish internships<small>What employers ask for, plan and job links</small></span><span class="tile-tag">Career</span></a>
-        <a class="tile" href="community.html"><span>Community<small>Start a focused discussion</small></span><span class="tile-tag">Forum</span></a>
+        <a class="tile" href="interview.html"><span>Interview prep<small>Java, Spring, AI and STAR questions</small></span><span class="tile-tag">Career</span></a>
+        <a class="tile" href="career.html"><span>Career and CV<small>What employers ask for, CV tips, job links</small></span><span class="tile-tag">Career</span></a>
+        <a class="tile" href="community.html"><span>Community<small>Ask questions in a moderated forum</small></span><span class="tile-tag">Forum</span></a>
         <a class="tile" href="notes.html"><span>Notes<small>Save what you learn</small></span><span class="tile-tag">Personal</span></a>
       </div>
-    </div></section>`, { dark: true });
-    $$('.chip', app).forEach((b) => b.addEventListener('click', () => { homeFilter = b.dataset.filter; renderHome(); }));
+    </div></section>`);
+    $$('.chip', app).forEach((btn) => btn.addEventListener('click', () => { homeFilter = btn.dataset.filter; renderHome(); }));
+    $('#quickTaskForm').addEventListener('submit', (e) => { e.preventDefault(); if (Tasks.add($('#quickTask').value)) { renderHome(); $('#quickTask').focus(); } });
+    wireTaskList($('#todayTasks'), renderHome);
+  }
+
+  /* ================= Tasks ================= */
+  function renderTasks() {
+    const list = Tasks.list();
+    const todo = list.filter((t) => !t.done), done = list.filter((t) => t.done);
+    setPage(`<div class="page"><div class="container narrow">
+      ${pageHead({ crumbs: [['index.html', 'Home'], [null, 'Tasks']], title: 'Tasks',
+        desc: 'Write down what you plan to do, one small task at a time. Ticking things off is real progress. Add any lesson step here with "Add to my tasks".',
+        actions: '<button class="btn small" type="button" data-action="focus">⏱ Pomodoro timer</button>' })}
+      <form class="card add-task" id="taskForm">
+        <label class="field"><span>New task</span><input class="input" id="taskText" maxlength="200" placeholder="e.g. Read step 2 of Java fundamentals"></label>
+        <p class="hint-text">Tip: start with a verb and keep it under 25 minutes, like "Write three Two Sum tests".</p>
+        <button class="btn dark" type="submit">Add task</button>
+      </form>
+      <section class="card" aria-labelledby="todoTitle"><h2 id="todoTitle">To do (${todo.length})</h2>
+        <ul class="task-list" id="todoList">${todo.map((t) => taskItem(t, false)).join('') || '<li class="task-empty">Nothing here. Add a task above, or open a lesson and choose "Add to my tasks".</li>'}</ul></section>
+      <section class="card" aria-labelledby="doneTitle"><div class="today-head"><h2 id="doneTitle">Done (${done.length})</h2>${done.length ? '<button class="btn small ghost" type="button" id="clearDone">Clear done tasks</button>' : ''}</div>
+        <ul class="task-list" id="doneList">${done.map((t) => taskItem(t, false)).join('') || '<li class="task-empty">Completed tasks appear here.</li>'}</ul></section>
+    </div></div>`);
+    $('#taskForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (Tasks.add($('#taskText').value)) { renderTasks(); $('#taskText').focus(); toast('Task added.'); }
+    });
+    wireTaskList($('#todoList'), renderTasks);
+    wireTaskList($('#doneList'), renderTasks);
+    const cd = $('#clearDone');
+    if (cd) cd.addEventListener('click', () => { Tasks.save(Tasks.list().filter((t) => !t.done)); renderTasks(); toast('Done tasks cleared.'); });
   }
   function moduleTile(m) {
     const s = Progress.moduleStats(m);
@@ -559,7 +723,7 @@
                 <div class="block-meta">${ms.done + ms.skipped}/${ms.total} steps ${timeTag(moduleMinutes(m))}</div>
               </div>
               ${stepSquares(m)}
-              <div class="block-links"><a href="${lessonUrl(m.id, (Progress.next([m]) || { i: 0 }).i)}" class="btn small dark">${ms.done + ms.skipped === 0 ? 'Start' : ms.done + ms.skipped === ms.total ? 'Review' : 'Continue'} →</a><a href="lesson.html?m=${m.id}&review=1" class="btn small">Module quiz</a><a href="roadmap.html?m=${m.id}" class="btn small ghost">Roadmap view</a></div>
+              <div class="block-links"><a href="${lessonUrl(m.id, (Progress.next([m]) || { i: 0 }).i)}" class="btn small dark">${ms.done + ms.skipped === 0 ? 'Start' : ms.done + ms.skipped === ms.total ? 'Review' : 'Continue'} →</a>${(m.lectures || []).map((lec, k) => `<a href="lecture.html?m=${m.id}&l=${k}" class="btn small lecture-link">▶ Lecture ${k + 1}</a>`).join('')}<a href="lesson.html?m=${m.id}&review=1" class="btn small">${m.finalQuiz ? 'Final quiz' : 'Module quiz'}</a><a href="roadmap.html?m=${m.id}" class="btn small ghost">Roadmap view</a></div>
             </section>`;
           }).join('')}
           <div class="cert-projects"><h3>Certification projects</h3>
@@ -621,7 +785,8 @@
         </section>
         <section class="chunk"><h2><span class="chunk-num">5</span>Go further</h2>
           <div class="link-list">${m.sourceUrl ? linkRow([m.sourceUrl, m.sourceLabel || 'Official documentation', 'Docs']) : ''}
-          <button type="button" class="resource-link as-button" data-note><span class="tag" style="background:#ede9fe;color:#5b21b6">Notes</span>Save this step to my notes<span class="out">→</span></button></div>
+          <button type="button" class="resource-link as-button" data-note><span class="tag" style="background:#ede9fe;color:#5b21b6">Notes</span>Save this step to my notes<span class="out">→</span></button>
+          <button type="button" class="resource-link as-button" data-addtask><span class="tag" style="background:#dcfce7;color:#166534">Tasks</span>Add this step to my tasks<span class="out">+</span></button></div>
         </section>
       </article>
       <div class="lesson-nav">
@@ -636,6 +801,7 @@
 
     if (st === 'pending') { Progress.set(key, 'learning'); $('#lessonStatus').className = 'status-pill learning'; $('#lessonStatus').textContent = STATUS_LABEL.learning; }
     lessonKey = key;
+    setupChunkStepper(key);
     const ta = $('#lessonAnswer');
     ta.addEventListener('input', () => { const a = store.get(userKey('answers'), {}); a[key] = ta.value; store.set(userKey('answers'), a); });
     $('#revealAnswer').addEventListener('click', (e) => {
@@ -656,6 +822,9 @@
       try { sessionStorage.setItem('sd:focusReading', on ? '1' : ''); } catch (err) { /* ignore */ }
     });
     $('[data-copy]').addEventListener('click', (e) => copyText(l.code, e.target));
+    $('[data-addtask]').addEventListener('click', () => {
+      toast(Tasks.add(`${m.title}: ${l.title}`, lessonUrl(m.id, i)) ? 'Added to your tasks.' : 'This step is already in your tasks.');
+    });
     $('[data-note]').addEventListener('click', () => {
       const note = Notes.add(l.title, `${m.title} — step ${i + 1}: ${l.title}\n\nGoal: ${l.objective}\n\nMy notes:\n${answers[key] || ''}`);
       goNote(note.id);
@@ -670,6 +839,36 @@
     });
   }
   let lessonKey = null;
+  // In simple view, a lesson shows one part at a time with clear Back / Next controls.
+  function setupChunkStepper(key) {
+    if (Settings.get().view !== 'simple') return;
+    const chunks = $$('.lesson .chunk', app);
+    if (chunks.length < 2) return;
+    let part = 0;
+    try { part = Math.min(chunks.length - 1, Number(sessionStorage.getItem('sd:part:' + key)) || 0); } catch (e) { /* ignore */ }
+    const bar = document.createElement('div');
+    bar.className = 'part-stepper';
+    bar.innerHTML = '<button class="btn" type="button" data-part="prev">← Back</button><span class="part-label" aria-live="polite"></span><button class="btn dark" type="button" data-part="next">Next part →</button>';
+    $('.lesson', app).appendChild(bar);
+    const nav = $('.lesson-nav', app);
+    const show = () => {
+      chunks.forEach((c, i) => { c.hidden = i !== part; });
+      $('.part-label', bar).textContent = `Part ${part + 1} of ${chunks.length}: ${chunks[part].querySelector('h2').textContent.replace(/^\d+/, '')}`;
+      $('[data-part="prev"]', bar).disabled = part === 0;
+      $('[data-part="next"]', bar).hidden = part === chunks.length - 1;
+      if (nav) nav.classList.toggle('dimmed', part !== chunks.length - 1);
+      try { sessionStorage.setItem('sd:part:' + key, String(part)); } catch (e) { /* ignore */ }
+    };
+    bar.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-part]');
+      if (!b) return;
+      part = Math.max(0, Math.min(chunks.length - 1, part + (b.dataset.part === 'next' ? 1 : -1)));
+      show();
+      chunks[part].querySelector('h2').focus({ preventScroll: false });
+    });
+    chunks.forEach((c) => c.querySelector('h2').setAttribute('tabindex', '-1'));
+    show();
+  }
   function setLessonStatus(st) {
     if (!lessonKey) return;
     Progress.set(lessonKey, st);
@@ -705,6 +904,17 @@
           <button class="btn small" type="button" id="exerciseNote">Start a note for this exercise</button></section>
         <section class="chunk"><h2><span class="chunk-num">4</span>Why employers care</h2>
           <ul class="skills">${(m.jobSkills || []).map((j) => `<li>${esc(j)}</li>`).join('')}</ul></section>
+        ${m.finalQuiz ? `<section class="chunk final-quiz" id="finalQuiz"><h2><span class="chunk-num">5</span>Final quiz</h2>
+          <p class="hint-text">${m.finalQuiz.length} questions. You see the answer straight away. Your first choice on each question counts towards your score; you can keep trying to find the right one.</p>
+          ${m.finalQuiz.map((q, qi) => {
+            const order = q.choices.map((c, ci) => ({ c, ci })).map((_, k, arr) => arr[(k + hashStr(m.id + qi)) % arr.length]);
+            return `<fieldset class="fq" data-q="${qi}"><legend>${qi + 1}. ${esc(q.q)}</legend>
+              <div class="quiz-options">${order.map(({ c, ci }) => `<button type="button" class="quiz-option" data-choice="${ci}">${esc(c)}</button>`).join('')}</div>
+              <p class="feedback" aria-live="polite"></p></fieldset>`;
+          }).join('')}
+          <div class="fq-score" id="fqScore" aria-live="polite"></div>
+          <button class="btn small" type="button" id="fqRetry" hidden>Try the quiz again</button>
+        </section>` : ''}
       </article>
       <div class="lesson-nav">
         <a class="btn" href="learn.html${cert ? '#cert-' + cert.id : ''}">← Back to Learn</a>
@@ -713,7 +923,148 @@
     </div></div>`);
     wireQuizzes(app, { ['mod-' + m.id]: { right: 'That is the key idea of this module.', wrong: 'Not this one. Look back at the steps and try again.' } });
     $('#exerciseNote').addEventListener('click', () => { const n = Notes.add(m.title + ' — exercise', `Exercise: ${m.exercise}\n\nMy approach:\n`); goNote(n.id); });
+    if (m.finalQuiz) wireFinalQuiz(m);
   }
+  function wireFinalQuiz(m) {
+    const first = {};
+    const box = $('#finalQuiz');
+    box.addEventListener('click', (e) => {
+      if (e.target.id === 'fqRetry') { renderModuleReview(m); $('#finalQuiz').scrollIntoView(); return; }
+      const btn = e.target.closest('.quiz-option');
+      if (!btn) return;
+      const fs = btn.closest('.fq');
+      const qi = Number(fs.dataset.q);
+      const q = m.finalQuiz[qi];
+      const right = Number(btn.dataset.choice) === q.answer;
+      if (!(qi in first)) first[qi] = right;
+      $$('.quiz-option', fs).forEach((b) => b.classList.remove('correct', 'wrong'));
+      btn.classList.add(right ? 'correct' : 'wrong');
+      const fb = $('.feedback', fs);
+      fb.className = 'feedback ' + (right ? 'good' : 'bad');
+      fb.textContent = right ? 'Correct. ' + q.why : 'Not this one. Have another look and try again.';
+      const answered = Object.keys(first).length;
+      if (answered === m.finalQuiz.length) {
+        const score = Object.values(first).filter(Boolean).length;
+        const pct = Math.round((score / m.finalQuiz.length) * 100);
+        $('#fqScore').innerHTML = `<b>You scored ${score} of ${m.finalQuiz.length} (${pct}%).</b> ${pct === 100 ? 'Perfect!' : pct >= 60 ? 'Good work. Review the ones you missed.' : 'That is fine. Look back at the steps and try again later.'}`;
+        $('#fqRetry').hidden = false;
+        Points.award('quiz:' + m.id, score * 5);
+        if (pct === 100) Points.award('quiz-perfect:' + m.id, 10);
+      }
+    });
+  }
+
+
+  /* ================= Lectures (captioned, with transcript) ================= */
+  let lectureTimer = null;
+  let lectureKeyHandler = null;
+  function stopLecturePlayback() {
+    clearTimeout(lectureTimer); lectureTimer = null;
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+  }
+  function renderLecture() {
+    stopLecturePlayback();
+    const m = byId(params.get('m'));
+    const lectures = (m && m.lectures) || [];
+    const li = Math.min(Math.max(0, Number(params.get('l')) || 0), lectures.length - 1);
+    const lec = lectures[li];
+    if (!m || !lec) return renderNotFound();
+    const cert = certOf(m.id);
+    document.title = lec.title + ' · Lecture · Study Desk';
+    const transcript = (lec.slides || []).map((sl, i) => `<li data-slide="${i}"><button type="button" class="transcript-jump" data-jump="${i}"><b>${esc(sl.heading)}</b></button><p>${esc(sl.narration)}</p></li>`).join('');
+    const hasVideo = !!lec.videoSrc;
+    setPage(`<div class="page lecture-page"><div class="container narrow">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="learn.html">Learn</a> › ${cert ? `<a href="learn.html#cert-${cert.id}">${esc(cert.title)}</a> › ` : ''}<span>${esc(m.title)}</span></nav>
+      <div class="lesson-top"><div class="step-count">Lecture ${li + 1} of ${lectures.length}</div>${timeTag(lec.minutes || 5)}</div>
+      <article class="card lesson readable" aria-labelledby="lectureTitle">
+        <h1 id="lectureTitle">${esc(lec.title)}</h1>
+        ${hasVideo ? `<video class="lecture-video" controls preload="metadata" src="${esc(lec.videoSrc)}">
+            ${lec.captionsSrc ? `<track kind="captions" src="${esc(lec.captionsSrc)}" srclang="en" label="English" default>` : ''}
+          </video>` : `
+        <div class="lecture-stage" id="lectureStage" aria-live="polite">
+          <div class="slide" id="slide"></div>
+          <div class="caption" id="caption" role="status"></div>
+        </div>
+        <div class="lecture-bar">${bar(0, 'Lecture progress')}<span id="slideCount" class="hint-text" style="margin:0"></span></div>
+        <div class="lecture-controls" role="group" aria-label="Lecture controls">
+          <button class="btn" type="button" id="lecPrev" aria-label="Previous slide">◀ Back</button>
+          <button class="btn dark" type="button" id="lecPlay">▶ Play</button>
+          <button class="btn" type="button" id="lecNext" aria-label="Next slide">Next ▶</button>
+          <label class="inline-field">Speed <select id="lecSpeed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option></select></label>
+          <label class="inline-field"><input type="checkbox" id="lecVoice"> Narrate aloud</label>
+          <label class="inline-field"><input type="checkbox" id="lecCaptions" checked> Captions</label>
+        </div>
+        <p class="hint-text">Keyboard: <kbd>Space</kbd> play or pause · <kbd>←</kbd> <kbd>→</kbd> slides · <kbd>C</kbd> captions. Playing moves on at a calm reading pace; turn on "Narrate aloud" to hear it.</p>`}
+        <details class="reveal transcript"${Settings.get().view === 'simple' ? '' : ' open'}><summary>Transcript</summary><ol id="transcript">${transcript}</ol></details>
+        <div class="lecture-done" id="lectureDone" hidden><p><b>Lecture complete.</b> Well done.</p></div>
+      </article>
+      <div class="lesson-nav">
+        ${li > 0 ? `<a class="btn" href="lecture.html?m=${m.id}&l=${li - 1}">← Previous lecture</a>` : `<a class="btn" href="learn.html${cert ? '#cert-' + cert.id : ''}">← Back to Learn</a>`}
+        ${li < lectures.length - 1 ? `<a class="btn yellow big" href="lecture.html?m=${m.id}&l=${li + 1}">Next lecture →</a>` : `<a class="btn yellow big" href="${lessonUrl(m.id, 0)}">Start the module steps →</a>`}
+      </div>
+    </div></div>`);
+    if (hasVideo) {
+      $('video', app).addEventListener('ended', () => Points.award(`lecture:${m.id}:${li}`, 5));
+      return;
+    }
+    const slides = lec.slides;
+    let idx = 0, playing = false;
+    const words = (t) => t.split(/\s+/).length;
+    const finish = () => { playing = false; paintPlay(); $('#lectureDone').hidden = false; Points.award(`lecture:${m.id}:${li}`, 5); };
+    function paintPlay() { $('#lecPlay').textContent = playing ? '❚❚ Pause' : '▶ Play'; }
+    function show(i) {
+      idx = Math.max(0, Math.min(slides.length - 1, i));
+      const sl = slides[idx];
+      $('#slide').innerHTML = `<h2>${esc(sl.heading)}</h2>${sl.points ? `<ul>${sl.points.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}${sl.code ? `<pre class="code"><code>${esc(sl.code)}</code></pre>` : ''}`;
+      $('#caption').textContent = sl.narration;
+      $('#caption').hidden = !$('#lecCaptions').checked;
+      $('#slideCount').textContent = `Slide ${idx + 1} of ${slides.length}`;
+      $('.lecture-bar .progress-fill', app).style.width = Math.round(((idx + 1) / slides.length) * 100) + '%';
+      $$('#transcript li', app).forEach((x) => x.classList.toggle('current', Number(x.dataset.slide) === idx));
+      $('#lecPrev').disabled = idx === 0;
+      $('#lecNext').textContent = idx === slides.length - 1 ? 'Finish ✓' : 'Next ▶';
+      $('#lecNext').setAttribute('aria-label', idx === slides.length - 1 ? 'Finish lecture' : 'Next slide');
+      if (playing) playSlide();
+    }
+    function playSlide() {
+      stopLecturePlayback();
+      const sl = slides[idx];
+      const rate = Number($('#lecSpeed').value);
+      const advance = () => { if (!playing) return; if (idx < slides.length - 1) show(idx + 1); else finish(); };
+      if ($('#lecVoice').checked && 'speechSynthesis' in window) {
+        const u = new SpeechSynthesisUtterance(sl.narration);
+        u.rate = rate;
+        u.onend = () => { lectureTimer = setTimeout(advance, 600); };
+        speechSynthesis.speak(u);
+      } else {
+        lectureTimer = setTimeout(advance, Math.max(4000, (words(sl.narration) / (150 * rate)) * 60000));
+      }
+    }
+    function togglePlay() {
+      playing = !playing;
+      paintPlay();
+      if (playing) { $('#lectureDone').hidden = true; playSlide(); } else stopLecturePlayback();
+    }
+    $('#lecPlay').addEventListener('click', togglePlay);
+    $('#lecPrev').addEventListener('click', () => show(idx - 1));
+    $('#lecNext').addEventListener('click', () => { if (idx === slides.length - 1) finish(); else show(idx + 1); });
+    $('#lecSpeed').addEventListener('change', () => { if (playing) playSlide(); });
+    $('#lecVoice').addEventListener('change', () => { if (playing) playSlide(); });
+    $('#lecCaptions').addEventListener('change', (e) => { $('#caption').hidden = !e.target.checked; });
+    $('#transcript').addEventListener('click', (e) => { const j = e.target.closest('[data-jump]'); if (j) show(Number(j.dataset.jump)); });
+    if (lectureKeyHandler) document.removeEventListener('keydown', lectureKeyHandler);
+    lectureKeyHandler = lectureKeys;
+    document.addEventListener('keydown', lectureKeyHandler);
+    function lectureKeys(e) {
+      if (PAGE !== 'lecture' || e.target.matches('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); $('#lecNext').click(); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); show(idx - 1); }
+      else if (e.key.toLowerCase() === 'c') { const c = $('#lecCaptions'); c.checked = !c.checked; $('#caption').hidden = !c.checked; }
+    }
+    show(0);
+  }
+  window.addEventListener('pagehide', () => stopLecturePlayback());
 
   /* ================= Roadmap (visual map + drawer) ================= */
   let currentRoadmap = null;
@@ -961,7 +1312,7 @@
     setPage(`<div class="page"><div class="container">
       ${pageHead({ crumbs: [['index.html', 'Home'], [null, 'Practice']], title: 'Coding challenges',
         desc: 'Problems in the style of the HackerRank and Codility tests used by Irish employers. Write JavaScript in the browser and run the tests. Each one has hints and a reference solution in JavaScript and Java.',
-        actions: '<button class="btn small" type="button" data-action="focus">Focus mode</button>',
+        actions: '<button class="btn small" type="button" data-action="focus">Pomodoro timer</button>',
         extra: `<div class="progress-line"><span class="progress-badge">${solvedCount}/${CHALLENGES.length}</span><span class="progress-text">challenges solved</span>${bar(Math.round((solvedCount / CHALLENGES.length) * 100), 'Challenges solved')}</div>` })}
       <div class="chip-row left" role="group" aria-label="Filter by level">${['All', ...LEVELS].map((l) => `<button type="button" class="chip light${l === practiceFilter ? ' active' : ''}" data-level="${l}" aria-pressed="${l === practiceFilter}">${l}</button>`).join('')}</div>
       <div class="challenge-list">${list.map((c) => `<a class="challenge-row" href="practice.html?c=${c.id}">
@@ -979,11 +1330,30 @@
           <p>For a sorted array, one search method repeatedly halves the remaining range.</p>
           ${quizBlock('bsearch', 'Which search method is it?', [{ text: 'Depth-first search', i: 0 }, { text: 'Binary search', i: 1 }, { text: 'Linear search', i: 2 }], 1)}</div>
       </div>
+      <div class="h-section">Java: predict the output <span>Read the code, then choose what it prints</span></div>
+      <div class="grid-2">
+        <div class="card"><div class="kicker">Java strings</div>
+          <pre class="code"><code>${esc('String a = new String("hi");\nString b = "hi";\nSystem.out.println(a == b);\nSystem.out.println(a.equals(b));')}</code></pre>
+          ${quizBlock('java-eq', 'What does it print?', [{ text: 'false then true', i: 0 }, { text: 'true then true', i: 1 }, { text: 'false then false', i: 2 }], 0)}</div>
+        <div class="card"><div class="kicker">Java integer division</div>
+          <pre class="code"><code>${esc('int lessons = 7;\nint days = 2;\nSystem.out.println(lessons / days);\nSystem.out.println(lessons / (double) days);')}</code></pre>
+          ${quizBlock('java-div', 'What does it print?', [{ text: '3.5 then 3.5', i: 0 }, { text: '3 then 3.5', i: 1 }, { text: '3 then 3', i: 2 }], 1)}</div>
+        <div class="card"><div class="kicker">Spring Boot</div>
+          <pre class="code"><code>${esc('@Service\nclass Greeter {\n  String greet(String n) { return "Hi " + n; }\n}\n@RestController\nclass Hello {\n  private final Greeter g;\n  Hello(Greeter g) { this.g = g; }\n  @GetMapping("/hi") String hi() { return g.greet("Sosa"); }\n}')}</code></pre>
+          ${quizBlock('spring-di', 'What does GET /hi return?', [{ text: 'Hi Sosa', i: 0 }, { text: 'A NullPointerException, because Greeter is never created', i: 1 }, { text: '404 Not Found', i: 2 }], 0)}</div>
+        <div class="card"><div class="kicker">Java collections</div>
+          <pre class="code"><code>${esc('List<Integer> xs = new ArrayList<>(List.of(3, 1, 2));\nCollections.sort(xs);\nxs.add(0, 9);\nSystem.out.println(xs);')}</code></pre>
+          ${quizBlock('java-list', 'What does it print?', [{ text: '[9, 1, 2, 3]', i: 0 }, { text: '[1, 2, 3, 9]', i: 1 }, { text: '[9, 3, 1, 2]', i: 2 }], 0)}</div>
+      </div>
     </div></div>`);
     $$('[data-level]', app).forEach((b) => b.addEventListener('click', () => { practiceFilter = b.dataset.level; renderPractice(); }));
     wireQuizzes(app, {
       'oop-tax': { right: 'Tax rules live in TaxPolicy, so a rate change touches only that class.', wrong: 'Think about which class owns the tax rule. Cart should not need to change.' },
       bsearch: { right: 'Binary search halves the range each step, so it runs in O(log n).', wrong: 'That one does not use the sorted order. Which method halves the range?' },
+      'java-eq': { right: '== compares references (two different objects), equals compares the text.', wrong: 'Think about what == compares for objects.' },
+      'java-div': { right: 'int / int drops the remainder; casting one side to double keeps it.', wrong: 'Look at the types on each side of the division.' },
+      'spring-di': { right: 'Spring creates the Greeter bean and injects it through the constructor.', wrong: '@Service makes Spring create Greeter and pass it to the constructor.' },
+      'java-list': { right: 'Sorting gives [1, 2, 3]; add(0, 9) inserts 9 at the front.', wrong: 'add(index, value) inserts at that position.' },
     });
   }
 
@@ -1004,11 +1374,11 @@
           <p>${esc(c.prompt)}</p>
           <h4>Examples</h4>
           <pre class="code light">${c.examples.map(esc).join('\n')}</pre>
-          <h4>Function to write</h4><p><code class="inline">${esc(c.fn)}</code></p>
+          ${c.kind === 'html' ? '<h4>What to write</h4><p>HTML (and CSS in a &lt;style&gt; block). The preview updates as you type.</p>' : `<h4>Function to write</h4><p><code class="inline">${esc(c.fn)}</code></p>`}
           <details class="reveal"><summary>Show a hint</summary><p style="margin:0">${esc(c.hint)}</p></details>
           <details class="reveal" style="margin-top:8px" id="solutionBox"><summary>Show the reference solutions</summary>
             <p class="hint-text">Try for at least 15 minutes first. Reading a solution after a real attempt still teaches you a lot.</p>
-            <div class="tabs" role="tablist"><button role="tab" type="button" class="tab active" data-tab="js" aria-selected="true">JavaScript</button><button role="tab" type="button" class="tab" data-tab="java" aria-selected="false">Java</button></div>
+            <div class="tabs" role="tablist"><button role="tab" type="button" class="tab active" data-tab="js" aria-selected="true">${c.kind === 'html' ? 'HTML and CSS' : 'JavaScript'}</button><button role="tab" type="button" class="tab" data-tab="java" aria-selected="false">${c.kind === 'html' ? 'React / Tailwind' : (/^\s*(static|class|public)/.test(c.java) ? 'Java' : 'In practice')}</button></div>
             <pre class="code" data-panel="js"><code>${esc(c.solution)}</code></pre>
             <pre class="code" data-panel="java" hidden><code>${esc(c.java)}</code></pre>
             <p><b>Complexity:</b> ${esc(c.complexity)}</p>
@@ -1020,8 +1390,9 @@
           <div class="btn-row" style="margin-top:10px">
             <button class="btn dark" type="button" id="runChallenge">Run the tests (Ctrl + Enter)</button>
             <button class="btn" type="button" id="resetChallenge">Reset code</button>
-            <button class="btn ghost" type="button" data-action="focus">Focus timer</button>
+            <button class="btn ghost" type="button" data-action="focus">Pomodoro timer</button>
           </div>
+          ${c.kind === 'html' ? '<h4>Preview</h4><iframe class="preview-frame" id="preview" title="Preview of your page" sandbox="allow-same-origin"></iframe>' : ''}
           <h4>Tests</h4>
           <ul class="test-list" id="testList" aria-live="polite">${c.tests.map((t, i) => `<li class="test" data-test="${i}"><span class="test-icon" aria-hidden="true">○</span><span>${esc(testLabel(c, t))}</span></li>`).join('')}</ul>
           <div class="test-summary" id="testSummary">${Solved.has(c.id) ? '✓ You have solved this before.' : 'Run the tests to check your code.'}</div>
@@ -1032,6 +1403,12 @@
     const code = $('#challengeCode');
     const saveDraft = () => { const d = store.get(userKey('drafts'), {}); d[c.id] = code.value; store.set(userKey('drafts'), d); };
     code.addEventListener('input', saveDraft);
+    if (c.kind === 'html') {
+      let pt;
+      const preview = () => { $('#preview').srcdoc = code.value; };
+      code.addEventListener('input', () => { clearTimeout(pt); pt = setTimeout(preview, 300); });
+      preview();
+    }
     code.addEventListener('keydown', (e) => {
       if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); code.setRangeText('  ', code.selectionStart, code.selectionEnd, 'end'); saveDraft(); }
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runChallenge(c, code.value); }
@@ -1044,6 +1421,7 @@
     }));
   }
   function testLabel(c, t) {
+    if (c.kind === 'html') return t.name;
     if (c.custom) return t.name + ' → ' + JSON.stringify(t.expected);
     return c.fn + '(' + t.args.map((a) => JSON.stringify(a)).join(', ') + ') → ' + JSON.stringify(t.expected);
   }
@@ -1052,8 +1430,41 @@
     $('#testSummary').textContent = 'Run the tests to check your code.';
     $('#testSummary').className = 'test-summary';
   }
+  function paintResults(c, r) {
+    const summary = $('#testSummary');
+    r.forEach((res, i) => {
+      const li = $(`#testList [data-test="${i}"]`);
+      li.className = 'test ' + (res.pass ? 'pass' : 'fail');
+      $('.test-icon', li).textContent = res.pass ? '✓' : '✗';
+      if (!res.pass) li.insertAdjacentHTML('beforeend', `<small class="test-detail">${c.kind === 'html' ? '' : 'Your result: '}${esc(res.got)}</small>`);
+    });
+    const passed = r.filter((x) => x.pass).length;
+    const all = passed === r.length;
+    summary.className = 'test-summary ' + (all ? 'good' : 'bad');
+    summary.textContent = all ? `✓ All ${r.length} tests pass. Well done! Now read the reference solution and compare.` : `${passed} of ${r.length} tests pass. Look at the first failing test — you are getting closer.`;
+    if (all) { Solved.add(c.id); if (!Points.award('challenge:' + c.id, 25)) toast('Challenge solved!'); }
+  }
+  // HTML/CSS: render into a sandboxed frame (scripts never run there), then inspect the result.
+  function runHtmlChallenge(c, source) {
+    const frame = $('#preview');
+    const btn = $('#runChallenge');
+    resetTests();
+    $('#testSummary').textContent = 'Checking…';
+    btn.disabled = true;
+    frame.onload = () => {
+      frame.onload = null;
+      btn.disabled = false;
+      const doc = frame.contentDocument, win = frame.contentWindow;
+      paintResults(c, c.tests.map((t) => {
+        try { const r = t.check(doc, win); return { pass: r === true, got: r === true ? '' : String(r || 'Not yet.') }; }
+        catch (err) { return { pass: false, got: 'Error: ' + err.message }; }
+      }));
+    };
+    frame.srcdoc = source;
+  }
   // Runs user code in a Web Worker with a time limit so loops cannot freeze the page.
   function runChallenge(c, source) {
+    if (c.kind === 'html') return runHtmlChallenge(c, source);
     const btn = $('#runChallenge');
     const summary = $('#testSummary');
     resetTests();
@@ -1082,18 +1493,7 @@
     worker.onmessage = (e) => {
       finish();
       if (e.data.error) { summary.className = 'test-summary bad'; summary.textContent = '✗ ' + e.data.error; return; }
-      const r = e.data.results;
-      r.forEach((res, i) => {
-        const li = $(`#testList [data-test="${i}"]`);
-        li.className = 'test ' + (res.pass ? 'pass' : 'fail');
-        $('.test-icon', li).textContent = res.pass ? '✓' : '✗';
-        if (!res.pass) li.insertAdjacentHTML('beforeend', `<small class="test-detail">Your result: ${esc(res.got)}</small>`);
-      });
-      const passed = r.filter((x) => x.pass).length;
-      const all = passed === r.length;
-      summary.className = 'test-summary ' + (all ? 'good' : 'bad');
-      summary.textContent = all ? `✓ All ${r.length} tests pass. Well done! Now read the reference solution and compare.` : `${passed} of ${r.length} tests pass. Look at the first failing test — you are getting closer.`;
-      if (all) { Solved.add(c.id); toast('Challenge solved!'); }
+      paintResults(c, e.data.results);
     };
     worker.onerror = (e) => { finish(); summary.className = 'test-summary bad'; summary.textContent = '✗ ' + (e.message || 'Error running code'); e.preventDefault(); };
     worker.postMessage({ source, fn: c.fn, tests: c.tests, custom: !!c.custom });
@@ -1147,7 +1547,7 @@
       if (e.target.checked) st.stories[i] = true; else delete st.stories[i];
       ProjectProgress.set(p.id, st);
       paint();
-      if (ProjectProgress.complete(p)) toast('Project complete. Add it to your CV!');
+      if (ProjectProgress.complete(p)) { Points.award('project:' + p.id, 50); toast('Project complete. Add it to your CV!'); }
     });
     $('#repoUrl').addEventListener('change', (e) => { const st = ProjectProgress.get(p.id); st.repo = e.target.value.trim(); ProjectProgress.set(p.id, st); toast('Repository link saved.'); });
     $('#copyCv').addEventListener('click', (e) => copyText(p.cv, e.target));
@@ -1175,13 +1575,36 @@
     { q: 'Tell me about a time you disagreed with someone.', hint: 'Respectful, evidence-based, outcome.' },
     { q: 'Why do you want to intern with us?', hint: 'Research the company: product, tech stack, values.' },
   ];
+  const JAVA_PROMPTS = [
+    { q: 'What happens when Spring Boot starts?', hint: 'Component scanning, auto-configuration, creating beans, embedded server.' },
+    { q: 'Explain dependency injection and why Spring uses constructor injection.', hint: 'Who creates objects; testability; final fields.' },
+    { q: 'What is the difference between @Component, @Service, @Repository and @Controller?', hint: 'All are beans; the names add meaning and some extra behaviour (exception translation).' },
+    { q: 'How does @Transactional work, and when does it not apply?', hint: 'Proxies; self-invocation; rollback on runtime exceptions.' },
+    { q: 'How would you design a REST endpoint to update a lesson?', hint: 'PUT vs PATCH, validation, status codes, DTOs.' },
+    { q: 'What is the N+1 query problem in JPA and how do you fix it?', hint: 'Lazy loading in a loop; join fetch or entity graphs.' },
+    { q: 'How do you secure a Spring Boot API?', hint: 'Spring Security, password hashing, roles, CSRF/CORS, least privilege.' },
+    { q: 'How do you test a Spring Boot application?', hint: 'Unit tests, @WebMvcTest, @DataJpaTest, Testcontainers.' },
+    { q: 'Explain equals() and hashCode() and why they matter for HashMap.', hint: 'The contract; buckets; what breaks if only one is overridden.' },
+    { q: 'What are Java records and when would you use one?', hint: 'Immutable data carriers; DTOs; generated methods.' },
+  ];
+  const AI_PROMPTS = [
+    { q: 'What is retrieval-augmented generation (RAG)?', hint: 'Retrieve relevant documents, then give them to the model as context.' },
+    { q: 'How would you add an AI tutor to a Spring Boot app with Spring AI?', hint: 'ChatClient, a service layer, configuration, error handling.' },
+    { q: 'What is an embedding and how is similarity measured?', hint: 'Vectors for meaning; cosine similarity; vector stores.' },
+    { q: 'How do you stop an AI feature inventing answers?', hint: 'Ground in sources, cite them, say "not found", validate output.' },
+    { q: 'What is prompt injection and how do you reduce the risk?', hint: 'Untrusted text treated as instructions; separate roles; limit tools.' },
+    { q: 'How would you test code that calls a language model?', hint: 'Stub the model; test the orchestration; cover timeouts and bad output.' },
+    { q: 'How do you handle a slow or failing model API in production?', hint: 'Timeouts, retries with backoff, circuit breaker, a clear fallback.' },
+    { q: 'What personal-data concerns come with AI features?', hint: 'What is sent to the provider, logging, retention, GDPR.' },
+  ];
+  const DECKS = { tech: ['Technical', TECH_PROMPTS], java: ['Java and Spring', JAVA_PROMPTS], ai: ['AI with Spring Boot', AI_PROMPTS], star: ['Behavioural (STAR)', STAR_PROMPTS] };
   let promptState = { deck: 'tech', index: -1 };
   const ivTimer = { total: 900, left: 900, id: null };
   function renderInterview() {
     setPage(`<div class="page"><div class="container">
       ${pageHead({ crumbs: [['index.html', 'Home'], [null, 'Interview prep']], title: 'Interview prep',
         desc: 'Practise explaining your thinking out loud. Use the timer only if you want it — practising calmly first is a good way to start.',
-        actions: '<a class="btn small" href="practice.html">Coding challenges →</a><a class="btn small" href="lesson.html?m=teamwork-career&i=3">Learn STAR →</a>' })}
+        actions: '<a class="btn small" href="practice.html">Coding challenges →</a><a class="btn small" href="learn.html?path=java-ai">Java backend and AI path →</a><a class="btn small" href="practice.html?c=cosine-similarity">AI challenge →</a><a class="btn small" href="lesson.html?m=teamwork-career&i=3">Learn STAR →</a>' })}
       <div class="card process">
         <h2>What the process usually looks like in Ireland</h2>
         <ol class="flow"><li><b>Apply</b> online form and CV</li><li><b>Online test</b> often HackerRank: 1 easy + 1 medium problem, sometimes SQL</li><li><b>Behavioural</b> STAR questions about teamwork and learning</li><li><b>Technical</b> live coding and talking through your approach</li><li><b>Offer</b></li></ol>
@@ -1189,8 +1612,8 @@
       </div>
       <div class="grid-2" style="margin-top:14px">
         <div class="card"><div class="kicker">Prompt deck</div><h2>Practise a question</h2>
-          <div class="tabs" role="tablist"><button role="tab" type="button" class="tab ${promptState.deck === 'tech' ? 'active' : ''}" data-deck="tech" aria-selected="${promptState.deck === 'tech'}">Technical</button><button role="tab" type="button" class="tab ${promptState.deck === 'star' ? 'active' : ''}" data-deck="star" aria-selected="${promptState.deck === 'star'}">Behavioural (STAR)</button></div>
-          <div class="prompt-card" id="promptCard"><b>Press “Show a question” to begin.</b><span>${TECH_PROMPTS.length} technical and ${STAR_PROMPTS.length} behavioural questions.</span></div>
+          <div class="tabs" role="tablist">${Object.entries(DECKS).map(([k, [label]]) => `<button role="tab" type="button" class="tab ${promptState.deck === k ? 'active' : ''}" data-deck="${k}" aria-selected="${promptState.deck === k}">${label}</button>`).join('')}</div>
+          <div class="prompt-card" id="promptCard"><b>Press “Show a question” to begin.</b><span>${DECKS[promptState.deck][1].length} questions in the ${DECKS[promptState.deck][0]} deck.</span></div>
           <div class="btn-row"><button class="btn dark small" type="button" id="showPrompt">Show a question</button><button class="btn small" type="button" id="savePrompt" disabled>Answer in notes</button></div>
           <p class="hint-text" id="starHelp" ${promptState.deck === 'star' ? '' : 'hidden'}><b>STAR:</b> Situation (1–2 sentences) · Task (your responsibility) · Action (most of the answer, say "I") · Result (what changed and what you learned). Aim for about 2 minutes.</p>
         </div>
@@ -1205,7 +1628,7 @@
     paintIvTimer();
     $$('[data-deck]', app).forEach((t) => t.addEventListener('click', () => { promptState = { deck: t.dataset.deck, index: -1 }; renderInterview(); }));
     $('#showPrompt').addEventListener('click', () => {
-      const deck = promptState.deck === 'star' ? STAR_PROMPTS : TECH_PROMPTS;
+      const deck = DECKS[promptState.deck][1];
       let n;
       do { n = Math.floor(Math.random() * deck.length); } while (deck.length > 1 && n === promptState.index);
       promptState.index = n;
@@ -1214,7 +1637,7 @@
       $('#savePrompt').disabled = false;
     });
     $('#savePrompt').addEventListener('click', () => {
-      const deck = promptState.deck === 'star' ? STAR_PROMPTS : TECH_PROMPTS;
+      const deck = DECKS[promptState.deck][1];
       const p = deck[promptState.index];
       const body = promptState.deck === 'star' ? `Question: ${p.q}\n\nSituation:\n\nTask:\n\nAction:\n\nResult:\n` : `Question: ${p.q}\nHint: ${p.hint}\n\nMy answer:\n`;
       const note = Notes.add('Interview: ' + p.q, body);
@@ -1241,51 +1664,155 @@
 
   /* ================= Community ================= */
   const TOPICS = 'sd:topics';
-  function renderCommunity() {
+  const GUIDELINES = [
+    'Be kind and patient. Everyone here is learning, and many people are neurodivergent; say what you mean clearly and assume good intent.',
+    'Ask specific questions: what you tried, what happened, and what you expected.',
+    'No harassment, discrimination, or personal attacks. Disagree with ideas, not people.',
+    'Keep personal information private: no addresses, phone numbers, passwords or API keys.',
+    'No cheating help for graded assessments or live interviews. Learning together is welcome.',
+    'Security topics stay legal and ethical: only discuss testing systems you are allowed to test.',
+    'Use "Report" if something breaks these rules. Posts with several reports are hidden until a moderator reviews them.',
+  ];
+  // One interface, two back ends: the Study Desk server (shared, moderated) or this browser only.
+  const Forum = {
+    server: () => Auth.available(),
+    async list() {
+      if (this.server()) {
+        const r = await fetch('/api/posts', { credentials: 'same-origin' }).then((x) => x.json()).catch(() => null);
+        return r && r.posts ? r.posts : [];
+      }
+      const user = Auth.current();
+      const me = user ? user.username : 'Guest';
+      return store.get(TOPICS, []).map((t) => ({
+        ...t, author: t.anonymous ? 'Anonymous' : t.author, mine: t.author === me,
+        canDelete: Auth.isAdmin() || t.author === me, replies: (t.replies || []).map((r) => ({ ...r, author: r.anonymous ? 'Anonymous' : r.author, mine: r.author === me, canDelete: Auth.isAdmin() || r.author === me })),
+      }));
+    },
+    async send(path, body) {
+      const res = await fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+      const data = await res.json().catch(() => ({}));
+      return res.ok ? { ok: true, ...data } : { ok: false, message: data.error || 'Something went wrong.' };
+    },
+    async create(post) {
+      if (this.server()) return this.send('/api/posts', post);
+      const user = Auth.current();
+      const list = store.get(TOPICS, []);
+      list.unshift({ id: uid(), title: post.title, body: post.body, module: post.module, anonymous: post.anonymous, author: user ? user.username : 'Guest', createdAt: Date.now(), replies: [] });
+      store.set(TOPICS, list);
+      return { ok: true };
+    },
+    async reply(id, body, anonymous) {
+      if (this.server()) return this.send(`/api/posts/${id}/replies`, { body, anonymous, agreed: true });
+      const user = Auth.current();
+      const list = store.get(TOPICS, []);
+      const t = list.find((x) => x.id === id);
+      if (!t) return { ok: false, message: 'That discussion no longer exists.' };
+      (t.replies = t.replies || []).push({ id: uid(), body, anonymous, author: user ? user.username : 'Guest', createdAt: Date.now() });
+      store.set(TOPICS, list);
+      return { ok: true };
+    },
+    async remove(id, replyId) {
+      if (this.server()) return this.send(replyId ? `/api/posts/${id}/replies/${replyId}/delete` : `/api/posts/${id}/delete`);
+      let list = store.get(TOPICS, []);
+      if (replyId) { const t = list.find((x) => x.id === id); if (t) t.replies = (t.replies || []).filter((r) => r.id !== replyId); }
+      else list = list.filter((t) => t.id !== id);
+      store.set(TOPICS, list);
+      return { ok: true };
+    },
+    report(id) { return this.send(`/api/posts/${id}/report`); },
+    restore(id) { return this.send(`/api/posts/${id}/restore`); },
+  };
+  async function renderCommunity() {
     const user = Auth.current();
-    const topics = store.get(TOPICS, []);
+    const serverMode = Forum.server();
+    const canPost = !serverMode || !!user;
+    const agreed = !!store.get(userKey('guidelines'), false);
+    const posts = await Forum.list();
     const me = user ? user.username : 'Guest';
+    const item = (x, postId) => `<div class="topic-meta"><span class="avatar small" aria-hidden="true">${esc(x.author[0].toUpperCase())}</span>${esc(x.author)}${x.anonymous && x.mine ? ' (you)' : ''} · ${fmtDate(x.createdAt)}
+      ${x.canDelete ? `<button class="btn ghost small danger" type="button" data-delete="${esc(postId)}"${postId !== x.id ? ` data-reply="${esc(x.id)}"` : ''}>Delete</button>` : ''}</div>`;
     setPage(`<div class="page"><div class="container narrow">
       ${pageHead({ crumbs: [['index.html', 'Home'], [null, 'Community']], title: 'Community',
-        desc: 'Ask a focused question about a step or exercise. Discussions are saved in this browser and shared between accounts on this device.',
-        actions: '<button class="btn dark small" type="button" id="newTopic">Start a discussion</button>' })}
+        desc: serverMode ? 'Ask questions, share what worked and support each other. Discussions are shared with everyone who uses this Study Desk and are moderated.' : 'Ask a focused question about a step or exercise. The Study Desk server is not running, so discussions are saved in this browser only.',
+        actions: canPost ? '<button class="btn dark small" type="button" id="newTopic">Start a discussion</button>' : '<button class="btn dark small" type="button" id="loginToPost">Log in to post</button>' })}
+      <details class="card guidelines"${agreed ? '' : ' open'}><summary><b>Community guidelines</b></summary>
+        <ol>${GUIDELINES.map((g) => `<li>${esc(g)}</li>`).join('')}</ol>
+        <p class="hint-text">Anonymous posts hide your name from other learners. Moderators can still see who posted, so the space stays safe.</p></details>
       <form class="card" id="topicForm" hidden style="margin-bottom:14px">
         <div class="kicker">New discussion · posting as ${esc(me)}</div>
         <label class="field"><span>Title</span><input class="input" id="topicTitle" maxlength="90" placeholder="What are you working through?"></label>
         <label class="field"><span>Details</span><textarea class="textarea" id="topicBody" maxlength="2000" placeholder="What did you try? What happened? What did you expect?"></textarea></label>
         <label class="field"><span>Module (optional)</span><select class="input" id="topicModule"><option value="">General</option>${MODULES.map((m) => `<option value="${m.id}">${esc(m.title)}</option>`).join('')}</select></label>
-        <div class="form-error" id="topicError"></div>
+        <label class="check-inline"><input type="checkbox" id="topicAnon"> Post anonymously</label>
+        <label class="check-inline"${agreed ? ' hidden' : ''}><input type="checkbox" id="topicAgree"${agreed ? ' checked' : ''}> I have read and agree to the community guidelines</label>
+        <div class="form-error" id="topicError" role="alert"></div>
         <div class="btn-row"><button class="btn dark small" type="submit">Post</button><button class="btn ghost small" type="button" id="cancelTopic">Cancel</button></div>
       </form>
-      <div id="topicList">${topics.length ? topics.map((t) => {
-        const canDelete = Auth.isAdmin() || t.author === me;
+      <div id="topicList">${posts.length ? posts.map((t) => {
         const mod = t.module && byId(t.module);
-        return `<article class="topic" data-id="${esc(t.id)}"><h3>${esc(t.title)}</h3><p>${esc(t.body)}</p>
-          <div class="topic-meta"><span class="avatar small" aria-hidden="true">${esc(t.author[0].toUpperCase())}</span>${esc(t.author)} · ${fmtDate(t.createdAt)}${mod ? ` · <a href="roadmap.html?m=${mod.id}">${esc(mod.title)}</a>` : ''}
-          ${canDelete ? `<button class="btn ghost small danger" type="button" data-delete="${esc(t.id)}">Delete</button>` : ''}</div></article>`;
-      }).join('') : '<div class="empty"><b>No discussions yet.</b>Ask about a concept, share a debugging clue or compare approaches to an exercise.<div style="margin-top:12px"><button class="btn small" type="button" id="emptyNewTopic">Start a discussion</button></div></div>'}</div>
+        return `<article class="topic${t.hidden ? ' is-hidden' : ''}" data-id="${esc(t.id)}">
+          ${t.hidden ? `<p class="hidden-note">Hidden after ${t.reports != null ? t.reports + ' ' : ''}reports — waiting for a moderator.${Auth.isAdmin() ? ' <button class="btn small" type="button" data-restore>Restore</button>' : ''}</p>` : ''}
+          <h3>${esc(t.title)}</h3><p>${esc(t.body)}</p>
+          ${item(t, t.id).replace('</div>', `${mod ? ` · <a href="roadmap.html?m=${mod.id}">${esc(mod.title)}</a>` : ''}${serverMode && user && !t.mine ? (t.reportedByMe ? ' <span class="hint-text" style="margin:0">Reported</span>' : ' <button class="btn ghost small" type="button" data-report>Report</button>') : ''}${Auth.isAdmin() && t.reports ? ` <span class="hint-text" style="margin:0">${t.reports} report(s)</span>` : ''}</div>`)}
+          ${(t.replies || []).length ? `<ul class="replies">${t.replies.map((r) => `<li class="reply"><p>${esc(r.body)}</p>${item(r, t.id)}</li>`).join('')}</ul>` : ''}
+          ${canPost ? `<details class="reply-box"><summary>Reply</summary>
+            <form data-replyform><label class="sr-only" for="reply-${esc(t.id)}">Your reply</label><textarea class="textarea" id="reply-${esc(t.id)}" maxlength="2000" placeholder="Be kind and specific…"></textarea>
+            <label class="check-inline"><input type="checkbox" data-anon> Reply anonymously</label>
+            <label class="check-inline"${agreed ? ' hidden' : ''}><input type="checkbox" data-agree${agreed ? ' checked' : ''}> I have read and agree to the community guidelines</label>
+            <div class="form-error" role="alert"></div><button class="btn small dark" type="submit">Post reply</button></form></details>` : ''}
+        </article>`;
+      }).join('') : `<div class="empty"><b>No discussions yet.</b>Ask about a concept, share a debugging clue or compare approaches to an exercise.${canPost ? '<div style="margin-top:12px"><button class="btn small" type="button" id="emptyNewTopic">Start a discussion</button></div>' : ''}</div>`}</div>
     </div></div>`);
     const form = $('#topicForm');
     const open = () => { form.hidden = false; $('#topicTitle').focus(); };
-    $('#newTopic').addEventListener('click', open);
+    const nt = $('#newTopic'); if (nt) nt.addEventListener('click', open);
     const en = $('#emptyNewTopic'); if (en) en.addEventListener('click', open);
+    const lp = $('#loginToPost'); if (lp) lp.addEventListener('click', () => openAuth('login'));
     $('#cancelTopic').addEventListener('click', () => { form.hidden = true; form.reset(); $('#topicError').textContent = ''; });
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const title = $('#topicTitle').value.trim(), body = $('#topicBody').value.trim();
       if (!title || !body) { $('#topicError').textContent = 'Add a title and a little context.'; return; }
-      const list = store.get(TOPICS, []);
-      list.unshift({ id: uid(), title, body, module: $('#topicModule').value, author: me, createdAt: Date.now() });
-      store.set(TOPICS, list);
-      renderCommunity();
+      if (!$('#topicAgree').checked) { $('#topicError').textContent = 'Please read and agree to the community guidelines first.'; return; }
+      store.set(userKey('guidelines'), true);
+      const r = await Forum.create({ title, body, module: $('#topicModule').value, anonymous: $('#topicAnon').checked, agreed: true });
+      if (!r.ok) { $('#topicError').textContent = r.message; return; }
+      await renderCommunity();
       toast('Discussion posted.');
     });
-    $('#topicList').addEventListener('click', (e) => {
-      const b = e.target.closest('[data-delete]');
-      if (!b || !confirm('Delete this discussion?')) return;
-      store.set(TOPICS, store.get(TOPICS, []).filter((t) => t.id !== b.dataset.delete));
-      renderCommunity();
-      toast('Discussion deleted.');
+    $('#topicList').addEventListener('submit', async (e) => {
+      const f = e.target.closest('[data-replyform]');
+      if (!f) return;
+      e.preventDefault();
+      const body = $('textarea', f).value.trim();
+      const err = $('.form-error', f);
+      if (!body) { err.textContent = 'Write a reply first.'; return; }
+      if (!$('[data-agree]', f).checked) { $('.guidelines').open = true; err.textContent = 'Please read and agree to the community guidelines first.'; return; }
+      store.set(userKey('guidelines'), true);
+      const r = await Forum.reply(f.closest('.topic').dataset.id, body, $('[data-anon]', f).checked);
+      if (!r.ok) { err.textContent = r.message; return; }
+      await renderCommunity();
+      toast('Reply posted.');
+    });
+    $('#topicList').addEventListener('click', async (e) => {
+      const art = e.target.closest('.topic');
+      if (!art) return;
+      const id = art.dataset.id;
+      let r = null;
+      const del = e.target.closest('[data-delete]');
+      if (del) {
+        if (!confirm(del.dataset.reply ? 'Delete this reply?' : 'Delete this discussion?')) return;
+        r = await Forum.remove(id, del.dataset.reply);
+        if (r.ok) toast('Deleted.');
+      } else if (e.target.closest('[data-report]')) {
+        if (!confirm('Report this post to the moderators?')) return;
+        r = await Forum.report(id);
+        if (r.ok) toast(r.hidden ? 'Reported. The post is now hidden until a moderator reviews it.' : 'Reported. Thank you for keeping the community safe.');
+      } else if (e.target.closest('[data-restore]')) {
+        r = await Forum.restore(id);
+        if (r.ok) toast('Post restored.');
+      }
+      if (r) { if (!r.ok) toast(r.message); await renderCommunity(); }
     });
   }
 
@@ -1345,6 +1872,29 @@
       <div class="grid-2">
         <div class="card"><div class="kicker">Asked for in almost every post</div><h2>Core requirements</h2>${MUST_HAVE.map(row).join('')}</div>
         <div class="card"><div class="kicker">Often listed as preferred</div><h2>Stand-out skills</h2>${NICE_TO_HAVE.map(row).join('')}</div>
+      </div>
+      <div class="card cv-tips" style="margin-top:14px"><h2>CV and application tips for Java, Spring and React roles</h2>
+        <div class="grid-2 plain">
+          <div><h3>Structure (one page)</h3><ol class="plain-list">
+            <li>Name, email, phone, LinkedIn, GitHub (no photo, age or address needed in Ireland).</li>
+            <li>Two-line summary: "Computer science student building Java and Spring Boot back ends with React front ends."</li>
+            <li>Skills, grouped: Languages (Java, JavaScript, SQL) · Frameworks (Spring Boot, React, Tailwind CSS) · Tools (Git, Docker, MySQL, JUnit).</li>
+            <li>Projects (2–3), each with what, how and a result.</li>
+            <li>Education, then experience (part-time jobs count: they show reliability and teamwork).</li>
+          </ol></div>
+          <div><h3>Project bullets that work</h3><ul class="plain-list">
+            <li>"Built a Spring Boot REST API on MySQL with Spring Security and 40 JUnit/MockMvc tests; deployed with Docker."</li>
+            <li>"Created an accessible React + Tailwind CSS front end with keyboard support and component tests."</li>
+            <li>"Added an AI study assistant with Spring AI that answers from course notes and cites its sources."</li>
+          </ul>
+          <h3>Small things that matter</h3><ul class="plain-list">
+            <li>Use the same words as the job post (many employers use applicant tracking systems that match keywords).</li>
+            <li>Save as PDF with a simple layout; no tables or text in images.</li>
+            <li>Pin your best repositories on GitHub, each with a README and a screenshot.</li>
+            <li>Whether to mention ADHD or autism is your choice. You can ask for adjustments to an assessment without giving a diagnosis.</li>
+          </ul></div>
+        </div>
+        <div class="btn-row"><a class="btn small" href="lesson.html?m=teamwork-career&i=4">Lesson: CV, GitHub and LinkedIn →</a><a class="btn small" href="learn.html?path=java-ai">Java backend and AI path →</a></div>
       </div>
       <div class="card" style="margin-top:14px"><h2>Also worth knowing</h2>
         <ul class="plain-list">
@@ -1521,17 +2071,30 @@
   });
 
   /* ================= Focus mode and breaks ================= */
+  // Pomodoro: a focus session (length from settings) followed by a 5-minute break.
+  const focusLength = () => Settings.get().focusMinutes * 60;
   const focus = { total: 1500, left: 1500, id: null, mode: 'focus' };
+  focus.total = focus.left = focusLength();
   function paintFocus() {
     $('#focusTimer').textContent = fmtTime(focus.left);
-    $('#focusStart').textContent = focus.id ? 'Pause' : focus.left === focus.total ? 'Start' : focus.left === 0 ? 'Start again' : 'Resume';
+    $('#focusStart').textContent = focus.id ? 'Pause' : focus.left === focus.total ? (focus.mode === 'break' ? 'Start break' : 'Start') : focus.left === 0 ? 'Start again' : 'Resume';
+    $('#focusCount').textContent = Pomodoros.count() ? `Pomodoros today: ${Pomodoros.count()}` : '';
   }
-  function openFocus(mode = 'focus') {
-    if (focus.mode !== mode) { clearInterval(focus.id); focus.id = null; }
+  function setFocusMode(mode) {
+    clearInterval(focus.id); focus.id = null;
     focus.mode = mode;
-    if (!focus.id) { focus.total = mode === 'break' ? 300 : 1500; if (focus.left > focus.total || focus.left === 0 || mode === 'break') focus.left = focus.total; }
-    $('#focusLabel').textContent = mode === 'break' ? 'Break' : 'Focus mode';
+    focus.total = focus.left = mode === 'break' ? 300 : focusLength();
+    $('#focusLabel').textContent = mode === 'break' ? 'Break' : 'Pomodoro: focus';
     $('#focusText').innerHTML = mode === 'break' ? 'Stand up, stretch, drink some water. Press <kbd>Esc</kbd> to come back early.' : 'One task. Everything else can wait. Press <kbd>Esc</kbd> to leave.';
+    paintFocus();
+  }
+  function resetFocusLength() { if (focus.mode === 'focus' && !focus.id) setFocusMode('focus'); }
+  function openFocus(mode = 'focus') {
+    if (focus.mode !== mode || (!focus.id && focus.left === 0)) setFocusMode(mode);
+    else {
+      $('#focusLabel').textContent = mode === 'break' ? 'Break' : 'Pomodoro: focus';
+      $('#focusText').innerHTML = mode === 'break' ? 'Stand up, stretch, drink some water. Press <kbd>Esc</kbd> to come back early.' : 'One task. Everything else can wait. Press <kbd>Esc</kbd> to leave.';
+    }
     $('#focusOverlay').classList.add('open');
     paintFocus();
     $('#focusStart').focus();
@@ -1543,8 +2106,18 @@
       focus.left = Math.max(0, focus.left - 1);
       if (focus.left === 0) {
         clearInterval(focus.id); focus.id = null;
-        toast(focus.mode === 'break' ? 'Break over. Welcome back.' : 'Focus session complete. Time for a break!');
-        if (focus.mode === 'break') { closeFocus(); BreakTimer.restart(); }
+        if (focus.mode === 'break') {
+          toast('Break over. Welcome back.');
+          setFocusMode('focus');
+          closeFocus();
+          BreakTimer.restart();
+        } else {
+          Pomodoros.add();
+          Points.award('pomodoro:' + Date.now(), 5);
+          toast('Focus session complete. Time for a 5-minute break.');
+          setFocusMode('break');
+          BreakTimer.restart();
+        }
       }
       paintFocus();
     }, 1000);
@@ -1602,7 +2175,7 @@
     const activeNav = PAGE === 'lesson' ? 'learn' : PAGE;
     $$('.nav-links a').forEach((a) => { const on = a.dataset.nav === activeNav; a.classList.toggle('active', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
     const p = new URLSearchParams(location.search);
-    const titles = { learn: 'Learn', roadmap: 'Roadmap', practice: 'Practice', projects: 'Projects', interview: 'Interview prep', community: 'Community', career: 'Career', notes: 'Notes' };
+    const titles = { tasks: 'Tasks', learn: 'Learn', roadmap: 'Roadmap', practice: 'Practice', projects: 'Projects', interview: 'Interview prep', community: 'Community', career: 'Career', notes: 'Notes' };
     if (PAGE === 'home') renderHome();
     else if (PAGE === 'learn') renderLearn();
     else if (PAGE === 'lesson') renderLesson();
@@ -1613,8 +2186,10 @@
     else if (PAGE === 'community') renderCommunity();
     else if (PAGE === 'career') renderCareer();
     else if (PAGE === 'notes') renderNotes(p.get('id'));
+    else if (PAGE === 'tasks') renderTasks();
+    else if (PAGE === 'lecture') renderLecture();
     else renderNotFound();
-    if (!['lesson'].includes(PAGE) && !(PAGE === 'practice' && p.get('c')) && !(PAGE === 'projects' && p.get('p'))) {
+    if (!['lesson', 'lecture'].includes(PAGE) && !(PAGE === 'practice' && p.get('c')) && !(PAGE === 'projects' && p.get('p'))) {
       const m = PAGE === 'roadmap' && p.get('m') && byId(p.get('m'));
       document.title = (m ? m.title + ' roadmap' : titles[PAGE] || 'Computer science, one step at a time') + ' · Study Desk';
     }

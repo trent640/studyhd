@@ -49,7 +49,7 @@ test('every page is its own HTML file and renders without errors', async () => {
   await go('roadmap.html?m=nope');
   assert.match(await page.textContent('.page-head h1'), /not found/i);
   const hrefs = await page.$$eval('.nav-links a', (as) => as.map((a) => a.getAttribute('href')));
-  assert.deepEqual(hrefs, ['learn.html', 'roadmap.html', 'practice.html', 'projects.html', 'interview.html', 'career.html', 'community.html', 'notes.html']);
+  assert.deepEqual(hrefs, ['learn.html', 'roadmap.html', 'practice.html', 'projects.html', 'tasks.html', 'interview.html', 'career.html', 'community.html', 'notes.html']);
   await page.click('.nav-links a[data-nav="career"]');
   await page.waitForURL(/career\.html$/);
   assert.equal(await page.getAttribute('.nav-links a.active', 'data-nav'), 'career');
@@ -275,20 +275,72 @@ test('interview: technical and STAR decks, notes template, optional timer', asyn
   noErrors();
 });
 
-test('community: validate, post, escape HTML, delete', async () => {
+const login = async (username, password) => {
+  await page.click('#loginBtn');
+  await page.fill('#authUsername', username);
+  await page.fill('#authPassword', password);
+  await page.click('#authSubmit');
+};
+
+const signUp = async (username, password = 'password123') => {
+  await page.click('#signupBtn');
+  await page.fill('#authUsername', username);
+  await page.fill('#authPassword', password);
+  await page.fill('#authConfirm', password);
+  await page.click('#authSubmit');
+  await page.waitForSelector('#logoutBtn');
+};
+
+test('community: guidelines, anonymous posts, replies, escaping, reports and moderation', async () => {
   await go('community.html');
+  // Guests can read but must log in to post on the shared server forum.
+  await page.waitForSelector('#loginToPost');
+  assert.ok(await page.isVisible('.guidelines ol'), 'guidelines are shown');
+  await signUp('learner_one');
   await page.click('#emptyNewTopic');
   await page.click('#topicForm button[type="submit"]');
   assert.match(await page.textContent('#topicError'), /title/);
   await page.fill('#topicTitle', '<img src=x onerror=alert(1)> Binary search');
   await page.fill('#topicBody', 'Why must the list be sorted?');
   await page.selectOption('#topicModule', 'algorithms');
+  await page.check('#topicAnon');
+  await page.click('#topicForm button[type="submit"]');
+  assert.match(await page.textContent('#topicError'), /guidelines/);
+  await page.check('#topicAgree');
   await page.click('#topicForm button[type="submit"]');
   await page.waitForSelector('.topic');
   assert.equal(await count('.topic img'), 0);
   assert.match(await page.textContent('.topic h3'), /<img/);
-  await page.click('[data-delete]');
+  assert.match(await page.textContent('.topic .topic-meta'), /Anonymous \(you\)/);
+  // Reply.
+  await page.click('.reply-box summary');
+  await page.fill('.reply-box textarea', 'Because it halves the range each time.');
+  await page.click('.reply-box button[type="submit"]');
+  await page.waitForSelector('.reply');
+  await page.click('#logoutBtn');
+  await page.waitForSelector('#loginBtn');
+  // The anonymous author's name is not exposed to other learners.
+  const listing = await page.evaluate(() => fetch('/api/posts').then((r) => r.json()));
+  assert.equal(listing.posts[0].author, 'Anonymous', 'anonymous author hidden in API');
+  assert.ok(!JSON.stringify(listing.posts[0]).replace(JSON.stringify(listing.posts[0].replies), '').includes('learner_one'), 'no name leaks on the post');
+  // Three different learners report it -> hidden until a moderator restores it.
+  for (const u of ['reporter_a', 'reporter_b', 'reporter_c']) {
+    await signUp(u);
+    await page.waitForSelector('[data-report]');
+    await page.click('[data-report]');
+    await page.waitForFunction(() => !document.querySelector('[data-report]'));
+    await page.click('#logoutBtn');
+    await page.waitForSelector('#loginBtn');
+  }
   await page.waitForSelector('.empty');
+  assert.equal(await count('.topic'), 0, 'reported post hidden from learners');
+  await login(ADMIN_USER, ADMIN_PASS);
+  await page.waitForSelector('[data-restore]');
+  await page.click('[data-restore]');
+  await page.waitForFunction(() => !document.querySelector('.topic.is-hidden'));
+  await page.click('[data-delete]:not([data-reply])');
+  await page.waitForSelector('.empty');
+  await page.click('#logoutBtn');
   noErrors();
 });
 
@@ -324,12 +376,6 @@ test('notes: create, edit, search and delete', async () => {
   noErrors();
 });
 
-const login = async (username, password) => {
-  await page.click('#loginBtn');
-  await page.fill('#authUsername', username);
-  await page.fill('#authPassword', password);
-  await page.click('#authSubmit');
-};
 
 test('auth: admin login comes from server settings; members, sessions and per-user data', async () => {
   await go('lesson.html?m=oop&i=0');
@@ -388,6 +434,7 @@ test('auth: admin login comes from server settings; members, sessions and per-us
   await page.click('#newTopic');
   await page.fill('#topicTitle', 'Member topic');
   await page.fill('#topicBody', 'Hello');
+  await page.check('#topicAgree');
   await page.click('#topicForm button[type="submit"]');
   await page.waitForSelector('[data-delete]');
   await page.click('#logoutBtn');
@@ -458,5 +505,96 @@ test('security: CSP present on every page, and stored content cannot inject scri
   assert.equal(await page.locator('.note-item img, #noteBody ~ * img').count(), 0);
   assert.equal(await page.evaluate(() => window.__xss), undefined, 'payload did not execute');
   assert.match(await page.textContent('.note-item'), /<img/);
+  noErrors();
+});
+
+test('tasks: add from home and lesson, tick, reorder, delete, clear', async () => {
+  await page.fill('#quickTask', 'Read the OOP lecture');
+  await page.click('#quickTaskForm button');
+  await page.waitForSelector('#todayTasks .task');
+  await go('lesson.html?m=oop&i=1');
+  await page.click('[data-addtask]');
+  await page.click('[data-addtask]'); // duplicates are ignored
+  await go('tasks.html');
+  assert.equal(await count('#todoList .task'), 2);
+  await page.click('#todoList .task >> nth=1 >> [data-move="-1"]');
+  assert.match(await page.textContent('#todoList .task >> nth=0'), /Object-oriented design/);
+  await page.click('#todoList .task >> nth=0 >> input');
+  await page.waitForSelector('#doneList .task');
+  await page.click('#clearDone');
+  assert.equal(await count('#doneList .task'), 0);
+  await page.click('#todoList .task >> nth=0 >> [data-remove]');
+  await page.waitForSelector('#todoList .task-empty');
+  noErrors();
+});
+
+test('lecture: captions, transcript, controls, completion and points', async () => {
+  await go('lecture.html?m=oop&l=0');
+  assert.match(await page.textContent('#slideCount'), /Slide 1 of 4/);
+  assert.ok((await page.textContent('#caption')).length > 20, 'caption shown');
+  assert.equal(await count('#transcript li'), 4);
+  await page.keyboard.press('ArrowRight');
+  assert.match(await page.textContent('#slideCount'), /Slide 2 of 4/);
+  await page.keyboard.press('c');
+  assert.ok(!(await page.isVisible('#caption')), 'captions toggled off');
+  await page.click('[data-jump="3"]');
+  assert.match(await page.textContent('#slideCount'), /Slide 4 of 4/);
+  await page.click('#lecNext');
+  await page.waitForSelector('#lectureDone:not([hidden])');
+  await go('index.html');
+  assert.match(await page.textContent('.points-total'), /^5 points/);
+  noErrors();
+});
+
+test('final quiz gives instant feedback, a score and a badge', async () => {
+  await go('lesson.html?m=oop&review=1');
+  const answers = await page.evaluate(() => window.StudyDesk.MODULES.find((m) => m.id === 'oop').finalQuiz.map((q) => q.answer));
+  for (let i = 0; i < answers.length; i++) {
+    await page.click(`.fq[data-q="${i}"] .quiz-option[data-choice="${answers[i]}"]`);
+    assert.match(await page.getAttribute(`.fq[data-q="${i}"] .feedback`, 'class'), /good/);
+  }
+  assert.match(await page.textContent('#fqScore'), /6 of 6 \(100%\)/);
+  await go('index.html');
+  assert.match(await page.getAttribute('.badge:has-text("Quiz ace")', 'class'), /earned/);
+  noErrors();
+});
+
+test('settings: simple view steps through lesson parts; contrast, fonts and hiding points', async () => {
+  await page.click('#settingsBtn');
+  await page.check('input[name="view"][value="simple"]');
+  await page.check('input[name="theme"][value="contrast"]');
+  await page.check('input[name="font"][value="lexend"]');
+  await page.uncheck('input[name="showPoints"]');
+  await page.keyboard.press('Escape');
+  const cls = await page.getAttribute('body', 'class');
+  for (const c of ['view-simple', 'theme-contrast', 'font-lexend', 'hide-points']) assert.ok(cls.includes(c), c);
+  assert.ok(!(await page.isVisible('.progress-card')), 'points hidden');
+  assert.ok(!(await page.isVisible('#moduleTiles')), 'simple view hides extra sections');
+  await go('lesson.html?m=oop&i=0');
+  assert.equal(await page.locator('.lesson .chunk:visible').count(), 1, 'one part at a time');
+  assert.match(await page.textContent('.part-label'), /Part 1 of 5/);
+  await page.click('[data-part="next"]');
+  assert.match(await page.textContent('.part-label'), /Part 2 of 5/);
+  await page.click('#settingsBtn');
+  await page.check('input[name="font"][value="dyslexic"]');
+  await page.waitForSelector('#font-opendyslexic', { state: 'attached' });
+  noErrors();
+});
+
+test('pomodoro: focus length setting, counts sessions and switches to a break', async () => {
+  await page.clock.install();
+  await page.evaluate(() => localStorage.setItem('sd:settings', JSON.stringify({ focusMinutes: 15, breakMinutes: 0 })));
+  await page.reload();
+  await page.click('.today-foot [data-action="focus"]');
+  assert.equal(await page.textContent('#focusTimer'), '15:00');
+  await page.click('#focusStart');
+  await page.clock.runFor('15:02');
+  await page.waitForFunction(() => document.querySelector('#focusLabel').textContent === 'Break');
+  assert.equal(await page.textContent('#focusTimer'), '05:00');
+  assert.match(await page.textContent('#focusCount'), /Pomodoros today: 1/);
+  await page.keyboard.press('Escape');
+  await page.reload();
+  assert.match(await page.textContent('.today-foot'), /1 done today/);
+  assert.match(await page.getAttribute('.badge:has-text("Focused")', 'class'), /earned/);
   noErrors();
 });

@@ -70,6 +70,11 @@ test('challenge reference solutions pass and starters fail', () => {
   };
   for (const c of SD_CHALLENGES) {
     assert.ok(ids.has(c.module), c.id + ' module');
+    if (c.kind === 'html') {
+      // HTML/CSS challenges are checked in a real browser by tests/app.test.js.
+      assert.ok(c.tests.every((t) => t.name && typeof t.check === 'function'), c.id + ' checks');
+      continue;
+    }
     assert.equal(passes(c, c.solution), c.tests.length, c.id + ' solution');
     assert.ok(passes(c, c.starter) < c.tests.length, c.id + ' starter should not pass');
     assert.ok(c.java && c.hint && c.complexity, c.id + ' extras');

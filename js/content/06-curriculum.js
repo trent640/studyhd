@@ -15,20 +15,26 @@ window.SD_CERTS = [
   {
     id: 'backend', title: 'Back-End Development with Java',
     desc: 'REST APIs with Spring Boot, SQL databases, testing and security.',
-    modules: ['databases', 'rest-apis', 'testing', 'security'],
+    modules: ['databases', 'rest-apis', 'backend-spring', 'cloud-frameworks', 'testing', 'security'],
     projects: ['task-api'],
   },
   {
     id: 'frontend', title: 'Front-End Development',
     desc: 'Accessible pages, JavaScript, React and TypeScript.',
-    modules: ['web-development', 'typescript'],
+    modules: ['web-development', 'web-patterns', 'frontend-react', 'typescript'],
     projects: ['task-ui'],
   },
   {
     id: 'engineering', title: 'Software Engineering Practice',
     desc: 'Git, Linux, Docker, CI/CD, the cloud, Agile teamwork and interviews.',
-    modules: ['git', 'devops-cloud', 'teamwork-career'],
+    modules: ['software-engineering', 'git', 'devops-cloud', 'project-management', 'teamwork-career'],
     projects: ['deploy-pipeline', 'team-project'],
+  },
+  {
+    id: 'databases-mysql', title: 'Database Development and Management (MySQL)',
+    desc: 'Design, query, manage and operate MySQL databases, and connect them to Spring Boot.',
+    modules: ['mysql', 'db-management', 'database-admin'],
+    projects: ['mysql-schema'],
   },
   {
     id: 'data-ai', title: 'Data and AI',
@@ -49,8 +55,10 @@ window.SD_CERTS = [
 /* Suggested order for the full roadmap (fundamentals first, interview prep alongside). */
 window.SD_PATH = [
   'java-fundamentals', 'oop', 'data-structures', 'algorithms', 'git', 'coding-assessments',
-  'testing', 'databases', 'rest-apis', 'web-development', 'python', 'typescript',
-  'devops-cloud', 'security', 'teamwork-career', 'data-analysis', 'ai-engineering', 'more-languages',
+  'software-engineering', 'testing', 'databases', 'mysql', 'db-management', 'database-admin',
+  'rest-apis', 'backend-spring', 'cloud-frameworks', 'web-development', 'web-patterns', 'frontend-react',
+  'python', 'typescript', 'devops-cloud', 'security', 'project-management', 'teamwork-career',
+  'data-analysis', 'ai-engineering', 'more-languages',
   'hacking-ethics', 'security-principles', 'networking-security', 'security-tooling',
   'recon', 'web-vulns-injection', 'web-vulns-access', 'api-mobile-cloud',
   'bug-bounty-practice', 'security-career',
@@ -61,7 +69,12 @@ window.SD_JOBPATHS = [
   {
     id: 'intern', title: 'Software engineering internship (Ireland)',
     desc: 'The core path to a software internship: programming, data structures and algorithms, back-end and front-end, engineering practice.',
-    certs: ['foundations', 'dsa', 'backend', 'frontend', 'engineering'],
+    certs: ['foundations', 'dsa', 'backend', 'databases-mysql', 'frontend', 'engineering'],
+  },
+  {
+    id: 'java-ai', title: 'Java backend and AI developer',
+    desc: 'Java, Spring and Spring Boot back ends on MySQL, plus AI features built with Spring AI, with matching interview prep and challenges.',
+    certs: ['foundations', 'dsa', 'backend', 'databases-mysql', 'data-ai'],
   },
   {
     id: 'bug-bounty', title: 'Bug bounty hunter / ethical hacker',
@@ -184,6 +197,20 @@ window.SD_PROJECTS = [
     ],
     stretch: ['Add a simple chat UI.', 'Log latency and outcome without logging prompts.'],
     cv: 'Built a Spring AI retrieval-augmented assistant that cites sources, handles model failures and is tested without a live model.',
+  },
+  {
+    id: 'mysql-schema', cert: 'databases-mysql', title: 'Design a MySQL database for a course platform', stack: 'MySQL · Spring Boot', hours: '8–12 hours',
+    summary: 'Design, build, secure and back up the database behind a learning platform like this one.',
+    stories: [
+      'Draw the schema: learners, modules, lessons, progress and forum posts, with keys and relationships.',
+      'Create it in MySQL 8 with InnoDB, utf8mb4, foreign keys and suitable types.',
+      'Load sample data and write five reporting queries (including a LEFT JOIN and a GROUP BY).',
+      'Add indexes for two slow queries and show the EXPLAIN output before and after.',
+      'Create a least-privilege application user and connect a Spring Boot app with it.',
+      'Back up with mysqldump and prove a restore works into a new database.',
+    ],
+    stretch: ['Add Flyway migrations.', 'Add a Testcontainers MySQL integration test.'],
+    cv: 'Designed and built a MySQL 8 schema for a learning platform with indexed reporting queries, least-privilege access and tested backups.',
   },
   {
     id: 'home-lab', cert: 'cybersecurity', title: 'Build and document a hacking lab', stack: 'Docker · Burp Suite · Linux', hours: '4–8 hours',

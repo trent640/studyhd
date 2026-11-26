@@ -1,0 +1,112 @@
+/* More coding challenges: HTML/CSS (live preview + automated checks), React logic, and
+   AI concepts used with Spring AI (embeddings and chunking). */
+(function (C) {
+  const text = (el) => (el ? el.textContent.trim() : '');
+
+  C.push(
+    {
+      id: 'accessible-nav', kind: 'html', title: 'Accessible navigation bar', level: 'Warm-up', minutes: 10, pattern: 'Semantic HTML', module: 'web-development', fn: 'HTML',
+      prompt: 'Write the HTML for a site navigation: a <nav> element labelled "Main" (aria-label) containing an unordered list of exactly three links: Home, Lessons and Help. Every link needs an href.',
+      examples: ['<nav aria-label="Main"> → <ul> → three <li><a href="...">…</a></li>'],
+      starter: '<!-- Write your navigation here -->\n<div>\n  Home | Lessons | Help\n</div>\n',
+      tests: [
+        { name: 'there is a <nav> element', check: (doc) => !!doc.querySelector('nav') || 'No <nav> element found.' },
+        { name: 'the nav is labelled "Main"', check: (doc) => (doc.querySelector('nav') && doc.querySelector('nav').getAttribute('aria-label') === 'Main') || 'Add aria-label="Main" to the nav.' },
+        { name: 'it contains a list with three items', check: (doc) => doc.querySelectorAll('nav ul > li').length === 3 || 'Found ' + doc.querySelectorAll('nav ul > li').length + ' list items.' },
+        { name: 'each item is a link with text and an href', check: (doc) => { const a = [...doc.querySelectorAll('nav ul > li > a')]; return (a.length === 3 && a.every((x) => x.getAttribute('href') && text(x))) || 'Each <li> needs one <a href="..."> with text.'; } },
+        { name: 'the links say Home, Lessons, Help', check: (doc) => [...doc.querySelectorAll('nav a')].map(text).join(',') === 'Home,Lessons,Help' || 'Check the link text and order.' },
+      ],
+      hint: 'Put an <ul> inside <nav aria-label="Main">, and an <a href="..."> inside each <li>.',
+      solution: '<nav aria-label="Main">\n  <ul>\n    <li><a href="/">Home</a></li>\n    <li><a href="/lessons">Lessons</a></li>\n    <li><a href="/help">Help</a></li>\n  </ul>\n</nav>',
+      java: '<!-- In React (JSX) -->\n<nav aria-label="Main">\n  <ul className="flex gap-4">\n    <li><a href="/">Home</a></li>\n    <li><a href="/lessons">Lessons</a></li>\n    <li><a href="/help">Help</a></li>\n  </ul>\n</nav>',
+      complexity: 'Semantic elements let screen-reader users jump straight to the navigation.',
+    },
+    {
+      id: 'accessible-form', kind: 'html', title: 'Accessible sign-up form', level: 'Easy', minutes: 15, pattern: 'Forms and labels', module: 'web-development', fn: 'HTML',
+      prompt: 'Build a sign-up form with an email field (type="email") and a password field (type="password"), each with a visible <label> connected by for/id, both marked required, and a submit button with the text "Create account".',
+      examples: ['<label for="email">Email</label> <input id="email" type="email" required>'],
+      starter: '<form>\n  Email <input>\n  Password <input>\n  <div>Create account</div>\n</form>\n',
+      tests: [
+        { name: 'has an email input', check: (doc) => !!doc.querySelector('input[type="email"]') || 'Add <input type="email">.' },
+        { name: 'has a password input', check: (doc) => !!doc.querySelector('input[type="password"]') || 'Add <input type="password">.' },
+        { name: 'every input has a connected <label>', check: (doc) => { const ins = [...doc.querySelectorAll('input')]; return (ins.length >= 2 && ins.every((i) => i.id && doc.querySelector('label[for="' + i.id + '"]') && text(doc.querySelector('label[for="' + i.id + '"]')))) || 'Give each input an id and a <label for="that-id"> with text.'; } },
+        { name: 'both inputs are required', check: (doc) => [...doc.querySelectorAll('input')].every((i) => i.required) || 'Add the required attribute.' },
+        { name: 'there is a submit button saying "Create account"', check: (doc) => { const b = doc.querySelector('button[type="submit"], button:not([type])'); return (b && text(b) === 'Create account') || 'Use <button type="submit">Create account</button>.'; } },
+      ],
+      hint: 'A label is connected when its for attribute matches the input\'s id. Use a real <button>, not a <div>.',
+      solution: '<form>\n  <label for="email">Email</label>\n  <input id="email" type="email" required>\n\n  <label for="password">Password</label>\n  <input id="password" type="password" required minlength="8">\n\n  <button type="submit">Create account</button>\n</form>',
+      java: '// In React, use htmlFor instead of for:\n<label htmlFor="email">Email</label>\n<input id="email" type="email" required />',
+      complexity: 'Connected labels make the field name readable by screen readers and enlarge the click area.',
+    },
+    {
+      id: 'flex-cards', kind: 'html', title: 'A responsive row of cards (CSS)', level: 'Easy', minutes: 15, pattern: 'Flexbox', module: 'frontend-react', fn: 'HTML + CSS',
+      prompt: 'Create a container with class "cards" holding three elements with class "card". Using CSS in a <style> block, make .cards a flex container with a gap between cards and allow wrapping, and give each card padding and a border.',
+      examples: ['.cards { display: flex; gap: 1rem; flex-wrap: wrap; }'],
+      starter: '<style>\n  /* your CSS here */\n</style>\n<div class="cards">\n  <div class="card">Lesson 1</div>\n  <div class="card">Lesson 2</div>\n  <div class="card">Lesson 3</div>\n</div>\n',
+      tests: [
+        { name: 'there are three .card elements inside .cards', check: (doc) => doc.querySelectorAll('.cards > .card').length === 3 || 'Need exactly three .card children of .cards.' },
+        { name: '.cards uses display: flex', check: (doc, win) => { const el = doc.querySelector('.cards'); return (el && win.getComputedStyle(el).display === 'flex') || 'Set display: flex on .cards.'; } },
+        { name: '.cards has a gap', check: (doc, win) => { const el = doc.querySelector('.cards'); const g = el && win.getComputedStyle(el).columnGap; return (g && g !== 'normal' && parseFloat(g) > 0) || 'Add a gap, for example gap: 1rem.'; } },
+        { name: '.cards wraps on small screens', check: (doc, win) => { const el = doc.querySelector('.cards'); return (el && win.getComputedStyle(el).flexWrap === 'wrap') || 'Add flex-wrap: wrap.'; } },
+        { name: 'each card has padding and a border', check: (doc, win) => [...doc.querySelectorAll('.card')].every((c) => { const st = win.getComputedStyle(c); return parseFloat(st.paddingTop) > 0 && parseFloat(st.borderTopWidth) > 0; }) || 'Give .card some padding and a border.' },
+      ],
+      hint: 'Flexbox properties go on the container (.cards); spacing inside a card goes on .card.',
+      solution: '<style>\n  .cards { display: flex; flex-wrap: wrap; gap: 1rem; }\n  .card { padding: 1rem; border: 1px solid #ccc; border-radius: 8px; flex: 1 1 160px; }\n</style>\n<div class="cards">\n  <div class="card">Lesson 1</div>\n  <div class="card">Lesson 2</div>\n  <div class="card">Lesson 3</div>\n</div>',
+      java: '<!-- The same with Tailwind CSS classes -->\n<div class="flex flex-wrap gap-4">\n  <div class="flex-1 basis-40 rounded-lg border p-4">Lesson 1</div>\n  <div class="flex-1 basis-40 rounded-lg border p-4">Lesson 2</div>\n  <div class="flex-1 basis-40 rounded-lg border p-4">Lesson 3</div>\n</div>',
+      complexity: 'flex-wrap lets cards move to a new line on narrow screens instead of squashing.',
+    },
+    {
+      id: 'progress-reducer', title: 'React: a progress reducer', level: 'Easy', minutes: 15, pattern: 'React state (useReducer)', module: 'frontend-react', fn: 'progressReducer',
+      prompt: 'Write the reducer for React\'s useReducer that tracks lesson progress. State is an object mapping lesson ids to "done" or "skipped". Actions: {type:"done", id}, {type:"skip", id} (sets "skipped"), {type:"reset"} (empty object). Unknown actions return the state unchanged. Never modify the old state object.',
+      examples: ['progressReducer({}, {type:"done", id:"a"}) → {a:"done"}'],
+      starter: 'function progressReducer(state, action) {\n  // your code here\n}\n',
+      custom: true,
+      tests: [
+        { name: 'marks a lesson done', run: 'return progressReducer({}, { type: "done", id: "a" });', expected: { a: 'done' } },
+        { name: 'marks a lesson skipped', run: 'return progressReducer({ a: "done" }, { type: "skip", id: "b" });', expected: { a: 'done', b: 'skipped' } },
+        { name: 'reset clears everything', run: 'return progressReducer({ a: "done" }, { type: "reset" });', expected: {} },
+        { name: 'unknown action returns the same state', run: 'const s = { a: "done" }; return progressReducer(s, { type: "nope" }) === s;', expected: true },
+        { name: 'does not modify the old state', run: 'const s = { a: "done" }; progressReducer(s, { type: "done", id: "b" }); return s;', expected: { a: 'done' } },
+      ],
+      hint: 'Use a switch on action.type and return a new object with the spread syntax: { ...state, [action.id]: "done" }.',
+      solution: 'function progressReducer(state, action) {\n  switch (action.type) {\n    case "done": return { ...state, [action.id]: "done" };\n    case "skip": return { ...state, [action.id]: "skipped" };\n    case "reset": return {};\n    default: return state;\n  }\n}',
+      java: '// Using it in a component:\nconst [progress, dispatch] = useReducer(progressReducer, {});\n<button onClick={() => dispatch({ type: "done", id: lesson.id })}>Done</button>',
+      complexity: 'Each update copies the object (O(n)); returning new objects is what lets React detect changes.',
+    },
+    {
+      id: 'cosine-similarity', title: 'AI: cosine similarity of embeddings', level: 'Medium', minutes: 20, pattern: 'Vectors (RAG retrieval)', module: 'ai-engineering', fn: 'cosineSimilarity',
+      prompt: 'Vector stores in Spring AI find the course notes most similar to a question by comparing embedding vectors. Write cosineSimilarity(a, b): the dot product of a and b divided by the product of their lengths. Return 0 if either vector has length 0. Round to 4 decimal places.',
+      examples: ['cosineSimilarity([1,0],[1,0]) → 1', 'cosineSimilarity([1,0],[0,1]) → 0', 'cosineSimilarity([1,2,3],[2,4,6]) → 1'],
+      starter: 'function cosineSimilarity(a, b) {\n  // your code here\n}\n',
+      tests: [
+        { args: [[1, 0], [1, 0]], expected: 1 },
+        { args: [[1, 0], [0, 1]], expected: 0 },
+        { args: [[1, 2, 3], [2, 4, 6]], expected: 1 },
+        { args: [[1, 0], [-1, 0]], expected: -1 },
+        { args: [[1, 2], [2, 1]], expected: 0.8 },
+        { args: [[0, 0], [1, 1]], expected: 0 },
+      ],
+      hint: 'Loop once to compute the dot product and both squared lengths; then divide by the product of the square roots.',
+      solution: 'function cosineSimilarity(a, b) {\n  let dot = 0, na = 0, nb = 0;\n  for (let i = 0; i < a.length; i++) {\n    dot += a[i] * b[i];\n    na += a[i] * a[i];\n    nb += b[i] * b[i];\n  }\n  if (na === 0 || nb === 0) return 0;\n  return Math.round((dot / (Math.sqrt(na) * Math.sqrt(nb))) * 10000) / 10000;\n}',
+      java: 'static double cosineSimilarity(double[] a, double[] b) {\n    double dot = 0, na = 0, nb = 0;\n    for (int i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }\n    if (na == 0 || nb == 0) return 0;\n    return Math.round(dot / (Math.sqrt(na) * Math.sqrt(nb)) * 10000) / 10000.0;\n}',
+      complexity: 'O(d) for d dimensions. Vector databases use indexes to avoid comparing against every stored vector.',
+    },
+    {
+      id: 'chunk-text', title: 'AI: split notes into chunks', level: 'Medium', minutes: 20, pattern: 'Strings (RAG ingestion)', module: 'ai-engineering', fn: 'chunkWords',
+      prompt: 'Before course notes go into a vector store, they are split into chunks. Write chunkWords(text, size, overlap): split text on whitespace into words, then return an array of chunks (strings of words joined by single spaces) each with at most size words, where each new chunk starts overlap words before the previous chunk ended. Return [] for empty text. Assume 0 <= overlap < size.',
+      examples: ['chunkWords("a b c d e", 3, 1) → ["a b c", "c d e"]', 'chunkWords("a b c d e f g", 3, 0) → ["a b c", "d e f", "g"]'],
+      starter: 'function chunkWords(text, size, overlap) {\n  // your code here\n}\n',
+      tests: [
+        { args: ['a b c d e', 3, 1], expected: ['a b c', 'c d e'] },
+        { args: ['a b c d e f g', 3, 0], expected: ['a b c', 'd e f', 'g'] },
+        { args: ['one two', 5, 2], expected: ['one two'] },
+        { args: ['', 3, 1], expected: [] },
+        { args: ['a  b\nc d', 2, 1], expected: ['a b', 'b c', 'c d'] },
+      ],
+      hint: 'Words: text.split(/\\s+/).filter(Boolean). Step forward by size - overlap each time, and stop once a chunk reaches the last word.',
+      solution: 'function chunkWords(text, size, overlap) {\n  const words = text.split(/\\s+/).filter(Boolean);\n  const chunks = [];\n  for (let start = 0; start < words.length; start += size - overlap) {\n    chunks.push(words.slice(start, start + size).join(" "));\n    if (start + size >= words.length) break;\n  }\n  return chunks;\n}',
+      java: '// Spring AI has a ready-made splitter:\nList<Document> chunks = new TokenTextSplitter().apply(documents);',
+      complexity: 'O(n) words. Overlap keeps sentences that cross a boundary findable from both chunks.',
+    }
+  );
+})(window.SD_CHALLENGES);
