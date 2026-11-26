@@ -7,7 +7,7 @@ const path = require('node:path');
 global.window = {};
 const dir = path.join(__dirname, '..', 'js', 'content');
 for (const f of fs.readdirSync(dir).sort()) require(path.join(dir, f));
-const { SD_MODULES: M, SD_PATH, SD_CERTS, SD_PROJECTS, SD_CHALLENGES } = window;
+const { SD_MODULES: M, SD_PATH, SD_CERTS, SD_PROJECTS, SD_CHALLENGES, SD_JOBPATHS } = window;
 const ids = new Set(M.map((m) => m.id));
 
 test('modules have every field and a valid quiz', () => {
@@ -39,6 +39,25 @@ test('path, certifications and projects reference real items and cover every mod
   }
   assert.deepEqual([...covered].sort(), [...ids].sort(), 'each module is in exactly one certification');
   for (const p of SD_PROJECTS) assert.ok(p.stories.length >= 5 && p.cv && p.stretch.length, p.id);
+});
+
+test('job paths reference real certifications and cover the two careers', () => {
+  const certIds = new Set(SD_CERTS.map((c) => c.id));
+  assert.ok(SD_JOBPATHS.length >= 2, 'at least two job paths');
+  for (const jp of SD_JOBPATHS) {
+    assert.ok(jp.id && jp.title && jp.desc, jp.id);
+    assert.ok(jp.certs.length > 0, jp.id + ' has certs');
+    jp.certs.forEach((id) => assert.ok(certIds.has(id), jp.id + ' -> ' + id));
+  }
+  const bb = SD_JOBPATHS.find((p) => p.id === 'bug-bounty');
+  assert.ok(bb && bb.certs.includes('cybersecurity'), 'bug bounty path includes the cybersecurity certification');
+});
+
+test('security modules are flagged as ethics modules and teach authorisation first', () => {
+  const sec = SD_CERTS.find((c) => c.id === 'cybersecurity').modules.map((id) => M.find((m) => m.id === id));
+  assert.ok(sec.length >= 10, 'cybersecurity has a full module set');
+  for (const m of sec) assert.equal(m.ethics, true, m.id + ' must be flagged ethics:true');
+  assert.equal(sec[0].id, 'hacking-ethics', 'ethics and law is the first module');
 });
 
 test('challenge reference solutions pass and starters fail', () => {

@@ -554,3 +554,14 @@ body.theme-dark .resource-link .tag { background: #1e293b; color: #bfdbfe; }
   .challenge-row { flex-wrap: wrap; }
   .step { width: 32px; height: 32px; }
 }
+
+/* v3: job paths and security ethics banner */
+.paths-intro { color: var(--night-mute); font-size: 14px; margin: -6px 0 12px; }
+.path-tile.tile { border-color: #4b5563; background: linear-gradient(90deg, #1b2330, var(--night-2)); }
+.path-tile:hover { border-color: #6b7686; }
+.path-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 16px; font-size: 14px; }
+.path-switch > span { color: var(--mute); font-weight: 600; margin-right: 2px; }
+.path-switch .chip.light { text-decoration: none; }
+.ethics-banner { border: 1px solid #f3d19b; background: #fff7e6; color: #5c3b00; border-radius: 8px; padding: 10px 14px; font-size: 14px; margin-bottom: 14px; }
+.ethics-banner b { display: block; margin-bottom: 2px; }
+body.theme-dark .ethics-banner { background: #2a2113; border-color: #5c4a22; color: #f0d9a8; }

@@ -10,6 +10,8 @@
   const CERTS = window.SD_CERTS || [];
   const PROJECTS = window.SD_PROJECTS || [];
   const CHALLENGES = window.SD_CHALLENGES || [];
+  const JOBPATHS = window.SD_JOBPATHS || [];
+  const certById = (id) => CERTS.find((c) => c.id === id);
   const byId = (id) => MODULES.find((m) => m.id === id);
   const certOf = (mid) => CERTS.find((c) => c.modules.includes(mid));
   const projectById = (id) => PROJECTS.find((p) => p.id === id);
@@ -521,6 +523,14 @@
         <li><b>Same layout every time.</b> Goal, example, code, try it, check yourself.</li>
         <li><b>You control the senses.</b> Text size, fonts, colours, motion and breaks in ⚙.</li>
       </ul>
+      <div class="section-label"><span>Job paths</span></div>
+      <p class="paths-intro">Follow a curated route to a specific career. Each path is a sequence of certifications.</p>
+      <div class="tile-grid">${JOBPATHS.map((jp) => {
+        const certs = jp.certs.map(certById).filter(Boolean);
+        const o = certs.reduce((a, c) => { const s = certStats(c); a.done += s.stepsDone + s.projDone; a.total += s.total + s.projTotal; return a; }, { done: 0, total: 0 });
+        const pct = o.total ? Math.round((o.done / o.total) * 100) : 0;
+        return `<a class="tile path-tile" href="learn.html?path=${jp.id}"><span>${esc(jp.title)}<small>${certs.length} certifications · ${esc(jp.desc)}</small></span><span class="tile-tag">${pct}%</span><i class="tile-bar" style="width:${pct}%"></i></a>`;
+      }).join('')}</div>
       <div class="section-label"><span>Certifications</span></div>
       <div class="tile-grid">${CERTS.map((c) => { const s = certStats(c); return `<a class="tile cert-tile" href="learn.html#cert-${c.id}"><span>${esc(c.title)}<small>${c.modules.length} modules · ${s.total} steps · ${c.projects.length} project${c.projects.length > 1 ? 's' : ''}</small></span>${s.complete ? '<span class="tile-tag done">✓ Complete</span>' : `<span class="tile-tag">${s.pct}%</span>`}<i class="tile-bar" style="width:${s.pct}%"></i></a>`; }).join('')}</div>
       <div class="section-label"><span>Module roadmaps</span></div>
@@ -546,17 +556,25 @@
   /* ================= Learn (certifications) ================= */
   function renderLearn() {
     const open = store.get('sd:openCerts', null);
+    const pathId = params.get('path');
+    const jobPath = JOBPATHS.find((p) => p.id === pathId);
+    const shownCerts = jobPath ? jobPath.certs.map(certById).filter(Boolean) : CERTS;
     setPage(`<div class="page"><div class="container">
-      ${pageHead({ crumbs: [['index.html', 'Home'], [null, 'Learn']], title: 'Learn',
-        desc: 'Six certifications. Each one is a set of modules made of short, numbered steps. Finish the steps, then build the projects to earn the certification. Go in order or pick what you need.' })}
+      ${pageHead({ crumbs: [['index.html', 'Home'], [null, 'Learn']], title: jobPath ? jobPath.title : 'Learn',
+        desc: jobPath ? esc(jobPath.desc) + ' Finish each certification\'s steps and projects in order.' : `${CERTS.length} certifications. Each one is a set of modules made of short, numbered steps. Finish the steps, then build the projects to earn the certification. Go in order or pick what you need.` })}
+      <div class="path-switch" role="group" aria-label="Choose a job path">
+        <span>Job path:</span>
+        <a class="chip light${!jobPath ? ' active' : ''}" href="learn.html"${!jobPath ? ' aria-current="true"' : ''}>All certifications</a>
+        ${JOBPATHS.map((p) => `<a class="chip light${jobPath && jobPath.id === p.id ? ' active' : ''}" href="learn.html?path=${p.id}"${jobPath && jobPath.id === p.id ? ' aria-current="true"' : ''}>${esc(p.title)}</a>`).join('')}
+      </div>
       ${continueCard(false)}
       <div class="how-it-works card">
         <h2>How each step works</h2>
         <ol class="flow"><li><b>Goal</b> what you will be able to do</li><li><b>Example</b> a real situation</li><li><b>Code</b> to read and run</li><li><b>Try it</b> a small task</li><li><b>Check</b> one question</li></ol>
       </div>
-      ${CERTS.map((c, ci) => {
+      ${shownCerts.map((c, ci) => {
         const s = certStats(c);
-        const isOpen = open ? open.includes(c.id) : ci === 0;
+        const isOpen = open ? open.includes(c.id) : (jobPath ? ci === 0 : ci === 0);
         return `<details class="cert" id="cert-${c.id}" data-cert="${c.id}"${isOpen ? ' open' : ''}>
           <summary>
             <span class="cert-title"><span class="cert-num">${ci + 1}</span>${esc(c.title)}${s.complete ? ' <span class="badge-done">✓ Certified</span>' : ''}</span>
@@ -607,6 +625,7 @@
         <div class="step-count">Step ${i + 1} of ${m.lessons.length}</div>
         ${stepSquares(m, i)}
       </div>
+      ${m.ethics ? '<div class="ethics-banner" role="note"><b>⚖ Only test what you are allowed to test.</b> Use your own lab or a program that invites testing, and stay inside its scope. Unauthorised access is a criminal offence in Ireland (Criminal Justice (Offences Relating to Information Systems) Act 2017).</div>' : ''}
       <article class="card lesson readable" aria-labelledby="lessonTitle">
         <div class="lesson-head">
           <h1 id="lessonTitle">${esc(l.title)}</h1>
@@ -1643,5 +1662,5 @@
   Auth.ready().then(() => { const u = Auth.current(); if (u && u.mustChangePassword) openPwModal(true); });
 
   // A small API for tests and debugging.
-  window.StudyDesk = { Auth, Progress, Notes, Settings, MODULES, CERTS, PROJECTS, CHALLENGES };
+  window.StudyDesk = { Auth, Progress, Notes, Settings, MODULES, CERTS, PROJECTS, CHALLENGES, JOBPATHS };
 })();

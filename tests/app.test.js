@@ -60,7 +60,8 @@ test('every page is its own HTML file and renders without errors', async () => {
 test('home shows the next step, certifications and filterable module tiles', async () => {
   const total = await page.evaluate(() => window.StudyDesk.MODULES.length);
   assert.equal(await count('#moduleTiles .tile'), total);
-  assert.equal(await count('.cert-tile'), 6);
+  assert.equal(await count('.cert-tile'), await page.evaluate(() => window.StudyDesk.CERTS.length));
+  assert.ok(await count('.path-tile') >= 2, 'job path tiles');
   await page.click('.chip[data-filter="Data"]');
   const n = await count('#moduleTiles .tile');
   assert.ok(n > 0 && n < total, 'filtered count ' + n);
@@ -71,7 +72,7 @@ test('home shows the next step, certifications and filterable module tiles', asy
 
 test('learn page lists certifications with step squares and projects', async () => {
   await go('learn.html');
-  assert.equal(await count('details.cert'), 6);
+  assert.equal(await count('details.cert'), await page.evaluate(() => window.StudyDesk.CERTS.length));
   const steps = await page.evaluate(() => window.StudyDesk.MODULES.reduce((s, m) => s + m.lessons.length, 0));
   assert.equal(await count('details.cert .steps .step'), steps);
   // Open state is remembered.
@@ -200,7 +201,7 @@ test('challenge runner handles syntax errors, infinite loops, drafts and solutio
 
 test('projects: user stories persist, complete a project, save repo link', async () => {
   await go('projects.html');
-  assert.equal(await count('.project-card'), 8);
+  assert.equal(await count('.project-card'), await page.evaluate(() => window.StudyDesk.PROJECTS.length));
   await go('projects.html?p=gradebook-cli');
   const n = await count('#stories input');
   for (let i = 0; i < n; i++) await page.check(`#story-${i}`);

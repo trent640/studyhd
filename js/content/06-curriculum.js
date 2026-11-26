@@ -36,6 +36,14 @@ window.SD_CERTS = [
     modules: ['data-analysis', 'ai-engineering'],
     projects: ['data-report', 'study-assistant'],
   },
+  {
+    id: 'cybersecurity', title: 'Cybersecurity and Ethical Hacking',
+    desc: 'Become a bug bounty hunter: ethics and law first, then web, API and cloud hacking, reporting and the security career path.',
+    modules: ['hacking-ethics', 'security-principles', 'networking-security', 'security-tooling',
+      'recon', 'web-vulns-injection', 'web-vulns-access', 'api-mobile-cloud',
+      'bug-bounty-practice', 'security-career'],
+    projects: ['home-lab', 'academy-portfolio', 'first-report'],
+  },
 ];
 
 /* Suggested order for the full roadmap (fundamentals first, interview prep alongside). */
@@ -43,6 +51,23 @@ window.SD_PATH = [
   'java-fundamentals', 'oop', 'data-structures', 'algorithms', 'git', 'coding-assessments',
   'testing', 'databases', 'rest-apis', 'web-development', 'python', 'typescript',
   'devops-cloud', 'security', 'teamwork-career', 'data-analysis', 'ai-engineering', 'more-languages',
+  'hacking-ethics', 'security-principles', 'networking-security', 'security-tooling',
+  'recon', 'web-vulns-injection', 'web-vulns-access', 'api-mobile-cloud',
+  'bug-bounty-practice', 'security-career',
+];
+
+/* Job paths: curated routes to a specific career, each a sequence of certifications. */
+window.SD_JOBPATHS = [
+  {
+    id: 'intern', title: 'Software engineering internship (Ireland)',
+    desc: 'The core path to a software internship: programming, data structures and algorithms, back-end and front-end, engineering practice.',
+    certs: ['foundations', 'dsa', 'backend', 'frontend', 'engineering'],
+  },
+  {
+    id: 'bug-bounty', title: 'Bug bounty hunter / ethical hacker',
+    desc: 'Everything needed to hunt bugs responsibly and move into a security career: programming and web basics first, then the full cybersecurity certification.',
+    certs: ['foundations', 'backend', 'cybersecurity'],
+  },
 ];
 
 /* Certification projects: user stories to satisfy, like freeCodeCamp's required projects. */
@@ -159,5 +184,48 @@ window.SD_PROJECTS = [
     ],
     stretch: ['Add a simple chat UI.', 'Log latency and outcome without logging prompts.'],
     cv: 'Built a Spring AI retrieval-augmented assistant that cites sources, handles model failures and is tested without a live model.',
+  },
+  {
+    id: 'home-lab', cert: 'cybersecurity', title: 'Build and document a hacking lab', stack: 'Docker · Burp Suite · Linux', hours: '4–8 hours',
+    summary: 'Set up a safe, legal environment where you can practise any technique, and document it.',
+    stories: [
+      'Run at least two deliberately vulnerable apps locally (e.g. OWASP Juice Shop, DVWA), bound to localhost only.',
+      'Configure Burp Suite Community with a dedicated browser and set a target scope.',
+      'Create separate test accounts (e.g. user A and user B) for access-control testing.',
+      'Write a lab README: what is installed, how to start it, and the rule that you only test these local apps.',
+      'Keep a session log template (date, what you tested, next action).',
+      'Confirm the lab apps are not reachable from any other device on your network.',
+    ],
+    stretch: ['Add a Kali or security-tools VM.', 'Script the lab startup with docker compose.'],
+    cv: 'Built and documented a local security lab (Juice Shop, DVWA, Burp Suite) for safe, legal vulnerability practice.',
+  },
+  {
+    id: 'academy-portfolio', cert: 'cybersecurity', title: 'Solve 15 Web Security Academy labs', stack: 'PortSwigger Academy', hours: '15–30 hours',
+    summary: 'Prove hands-on skill across the main web vulnerability classes using free, legal labs, and write them up.',
+    stories: [
+      'Solve at least 3 access-control labs (including one IDOR and one privilege escalation).',
+      'Solve at least 3 injection labs (SQL injection and/or cross-site scripting).',
+      'Solve at least 2 authentication labs.',
+      'Solve at least 2 SSRF or business-logic labs.',
+      'For each lab, write a short note: the cause, the proof, the impact, and the fix.',
+      'Publish a write-up of 3 labs (retired/lab material only) on GitHub or a blog.',
+    ],
+    stretch: ['Work toward the BSCP certification.', 'Add a CTF profile (TryHackMe or Hack The Box).'],
+    cv: 'Solved 15+ PortSwigger Web Security Academy labs across access control, injection, auth and SSRF, with published write-ups.',
+  },
+  {
+    id: 'first-report', cert: 'cybersecurity', title: 'Write a professional vulnerability report', stack: 'Reporting · CVSS', hours: '3–6 hours',
+    summary: 'Produce a report, from a lab finding, that a triage team could reproduce and rate immediately.',
+    stories: [
+      'Find a vulnerability in your own lab (or a program you are authorised to test).',
+      'Write a clear title: vulnerability type, feature and impact.',
+      'Give numbered, exact reproduction steps with the requests and responses.',
+      'State the impact: who is affected and what an attacker gains.',
+      'Score it with a CVSS vector and include a redacted proof (minimal data).',
+      'Give specific remediation advice.',
+      'Have a peer reproduce the issue using only your report.',
+    ],
+    stretch: ['Register on HackerOne, Bugcrowd or Intigriti and read five disclosed reports.', 'Submit to a VDP you are authorised to test.'],
+    cv: 'Wrote professional vulnerability reports with exact reproduction steps, CVSS scoring, impact and remediation.',
   },
 ];
