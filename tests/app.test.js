@@ -13,11 +13,12 @@ const { createApp } = require('../server.js');
 // Generated per run: no admin credentials are stored in the repository.
 const ADMIN_USER = 'owner_' + crypto.randomBytes(3).toString('hex');
 const ADMIN_PASS = crypto.randomBytes(12).toString('base64url');
-let server, browser, ctx, page, base, errors, dataDir;
+let server, browser, ctx, page, base, errors, dataDir, runner;
 
 before(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'studydesk-test-'));
-  ({ server } = await createApp({ dataDir, adminUsername: ADMIN_USER, adminPassword: ADMIN_PASS, log: () => {} }));
+  ({ server, runner } = await createApp({ dataDir, adminUsername: ADMIN_USER, adminPassword: ADMIN_PASS, log: () => {},
+    maxRegistrationsPerHour: 1000, reportMinAgeMs: 0, runRateLimit: 1000 }));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://localhost:${server.address().port}/`;
   browser = await chromium.launch();
@@ -38,6 +39,9 @@ afterEach(async () => { await ctx.close(); });
 const go = (url) => page.goto(base + url);
 const noErrors = () => assert.deepEqual(errors, [], 'page errors: ' + errors.join('; '));
 const count = (sel) => page.locator(sel).count();
+// The challenge editor is CodeMirror; read and write its contents through its API.
+const setCode = (code) => page.evaluate((v) => document.querySelector('.CodeMirror').CodeMirror.setValue(v), code);
+const getCode = () => page.evaluate(() => document.querySelector('.CodeMirror').CodeMirror.getValue());
 const PAGES = ['index.html', 'learn.html', 'lesson.html?m=oop&i=0', 'roadmap.html', 'practice.html', 'projects.html',
   'interview.html', 'career.html', 'community.html', 'notes.html'];
 
@@ -78,6 +82,7 @@ test('learn page lists certifications with step squares and projects', async () 
   await page.click('#cert-dsa > summary');
   await page.waitForFunction(() => (localStorage.getItem('sd:openCerts') || '').includes('dsa'));
   await page.reload();
+  await page.waitForSelector('#cert-dsa');
   assert.equal(await page.evaluate(() => document.querySelector('#cert-dsa').open), true);
   await page.click('#cert-dsa .block .step >> nth=0');
   await page.waitForURL(/lesson\.html\?m=data-structures&i=0/);
@@ -152,17 +157,18 @@ test('roadmap draws nodes and wires, drawer updates status and links to the full
   noErrors();
 });
 
-test('every challenge: starter fails, reference solution passes all tests in the browser', async () => {
-  const ids = await page.evaluate(() => window.StudyDesk.CHALLENGES.map((c) => c.id));
+test('every browser-run challenge (JavaScript, HTML/CSS, SQL): starter fails, reference solution passes', async () => {
+  const ids = await page.evaluate(() => window.StudyDesk.CHALLENGES.filter((c) => c.kind !== 'java').map((c) => c.id));
   for (const id of ids) {
     await go('practice.html?c=' + id);
+    await page.waitForSelector('.CodeMirror');
     const solution = await page.evaluate((cid) => window.StudyDesk.CHALLENGES.find((c) => c.id === cid).solution, id);
     await page.click('#runChallenge');
     await page.waitForFunction(() => /tests pass|✗/.test(document.querySelector('#testSummary').textContent));
     assert.ok(!/All \d+ tests pass/.test(await page.textContent('#testSummary')), id + ' starter should fail');
-    await page.fill('#challengeCode', solution);
+    await setCode(solution);
     await page.click('#runChallenge');
-    await page.waitForFunction(() => /All \d+ tests pass/.test(document.querySelector('#testSummary').textContent), null, { timeout: 5000 });
+    await page.waitForFunction(() => /All \d+ tests pass/.test(document.querySelector('#testSummary').textContent), null, { timeout: 8000 });
   }
   await go('practice.html');
   assert.equal(await count('.challenge-row .proj-check.done'), ids.length);
@@ -171,19 +177,26 @@ test('every challenge: starter fails, reference solution passes all tests in the
 
 test('challenge runner handles syntax errors, infinite loops, drafts and solution tabs', async () => {
   await go('practice.html?c=fizzbuzz');
-  await page.fill('#challengeCode', 'function fizzBuzz(n) {');
+  await page.waitForSelector('.CodeMirror');
+  await setCode('function fizzBuzz(n) {');
   await page.click('#runChallenge');
   await page.waitForFunction(() => /syntax error/.test(document.querySelector('#testSummary').textContent));
-  await page.fill('#challengeCode', 'function fizzBuzz(n) { while (true) {} }');
+  await setCode('function fizzBuzz(n) { while (true) {} }');
   await page.click('#runChallenge');
   await page.waitForFunction(() => /Stopped after/.test(document.querySelector('#testSummary').textContent), null, { timeout: 6000 });
-  await page.fill('#challengeCode', 'function wrongName() {}');
+  await setCode('function wrongName() {}');
+  await page.click('.CodeMirror');
   await page.keyboard.press('Control+Enter');
   await page.waitForFunction(() => /Define a function named fizzBuzz/.test(document.querySelector('#testSummary').textContent));
   await page.reload();
-  assert.equal(await page.inputValue('#challengeCode'), 'function wrongName() {}');
+  await page.waitForSelector('.CodeMirror');
+  assert.equal(await getCode(), 'function wrongName() {}');
   await page.click('#resetChallenge');
-  assert.match(await page.inputValue('#challengeCode'), /your code here/);
+  assert.match(await getCode(), /your code here/);
+  // Esc leaves the editor (no keyboard trap).
+  await page.click('.CodeMirror');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'runChallenge');
   await page.click('#solutionBox summary');
   await page.click('.tab[data-tab="java"]');
   assert.ok(await page.isVisible('[data-panel="java"]'));
@@ -204,7 +217,17 @@ test('projects: user stories persist, complete a project, save repo link', async
   await go('projects.html?p=gradebook-cli');
   const n = await count('#stories input');
   for (let i = 0; i < n; i++) await page.check(`#story-${i}`);
-  assert.match(await page.textContent('#projProgress'), /project complete/);
+  // Stories alone are not enough: the project's automated checks (linked challenges) must pass too.
+  assert.match(await page.textContent('#projProgress'), /0\/2 automated checks passed/);
+  await page.evaluate(() => {
+    const u = window.StudyDesk.Auth.current();
+    const key = 'sd:' + (u ? u.username : 'guest') + ':solved';
+    const solved = JSON.parse(localStorage.getItem(key) || '{}');
+    for (const id of ['gradebook-core', 'bank-account']) solved[id] = Date.now();
+    localStorage.setItem(key, JSON.stringify(solved));
+  });
+  await page.reload();
+  assert.match(await page.textContent('#projProgress'), /project complete/i);
   await page.fill('#repoUrl', 'https://github.com/me/gradebook');
   await page.press('#repoUrl', 'Tab');
   await page.reload();
@@ -618,5 +641,43 @@ test('roadmap: W3Schools-style topics and Previous/Next, freeCodeCamp-style step
   await page.setViewportSize({ width: 375, height: 800 });
   await page.reload();
   assert.ok(await page.isVisible('.rm-side-mobile summary'), 'topics collapse on phones');
+  noErrors();
+});
+
+test('Java in the editor: guests are asked to log in; members compile and run against tests', async (t) => {
+  if (!runner.java) { t.skip('no JDK on this machine'); return; }
+  await go('practice.html?c=two-sum');
+  await page.waitForSelector('.CodeMirror');
+  await page.click('[data-switchlang="java"]');
+  await page.waitForSelector('#runnerNote:not([hidden])');
+  assert.ok(await page.isDisabled('#runChallenge'));
+  await signUp('java_learner');
+  await page.reload();
+  await page.waitForSelector('.CodeMirror');
+  assert.match(await page.textContent('.lang-switch .chip.active'), /Java/, 'language choice remembered');
+  await page.click('#runChallenge');
+  await page.waitForFunction(() => /tests pass|✗/.test(document.querySelector('#testSummary').textContent), null, { timeout: 30000 });
+  assert.match(await page.textContent('#testSummary'), /0 of 4/);
+  await setCode('class Solution { static int[] twoSum(int[] n, int t) { return null } }');
+  await page.click('#runChallenge');
+  await page.waitForFunction(() => /does not compile/.test(document.querySelector('#testSummary').textContent), null, { timeout: 30000 });
+  assert.match(await page.textContent('#runOutput'), /Solution\.java:1: error/);
+  const sol = await page.evaluate(() => window.StudyDesk.CHALLENGES.find((c) => c.id === 'two-sum').javaSolution);
+  await setCode(sol.replace('return new int[0];', 'System.out.println("debug line");\n        return new int[0];'));
+  await page.click('#runChallenge');
+  await page.waitForFunction(() => /All 4 tests pass/.test(document.querySelector('#testSummary').textContent), null, { timeout: 30000 });
+  // A project's automated checks reflect solved challenges.
+  await go('projects.html?p=dsa-library');
+  assert.match(await page.textContent('#projProgress'), /1\/3 automated checks passed/);
+  noErrors();
+});
+
+test('Java "predict the output" questions can be run for real', async (t) => {
+  if (!runner.java) { t.skip('no JDK on this machine'); return; }
+  await go('practice.html');
+  await signUp('predictor');
+  await page.click('[data-runpredict="java-div"]');
+  await page.waitForFunction(() => !/Running/.test(document.querySelector('#out-java-div').textContent), null, { timeout: 30000 });
+  assert.equal((await page.textContent('#out-java-div')).trim(), '3\n3.5');
   noErrors();
 });

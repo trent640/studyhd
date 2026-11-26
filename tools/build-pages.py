@@ -19,18 +19,21 @@ pages = [
 import glob
 content = sorted(glob.glob(os.path.join(root, 'js', 'content', '*.js')))
 scripts = ['js/content/' + os.path.basename(c) for c in content] + ['js/app.js']
+# The code editor (CodeMirror, MIT licence) is only loaded on the practice page.
+editor_js = ['js/vendor/codemirror/' + f for f in ['codemirror.js', 'addon-matchbrackets.js', 'addon-closebrackets.js', 'mode-javascript.js', 'mode-clike.js', 'mode-sql.js', 'mode-xml.js', 'mode-css.js', 'mode-htmlmixed.js']]
+extra = {'practice': {'css': ['js/vendor/codemirror/codemirror.css'], 'js': editor_js}}
 tpl = '''<!doctype html>
 <html lang="en-IE">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'unsafe-eval'; worker-src blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com https://cdn.jsdelivr.net; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'unsafe-eval' 'wasm-unsafe-eval'; worker-src blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'">
 <title>{title}</title>
 <meta name="description" content="{desc}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Lexend:wght@400;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/styles.css">
+{extra_css}<link rel="stylesheet" href="css/styles.css">
 </head>
 <body data-page="{page}"{dark}>
 <main id="app" tabindex="-1"><noscript><p style="padding:24px">Study Desk needs JavaScript enabled.</p></noscript></main>
@@ -40,6 +43,8 @@ tpl = '''<!doctype html>
 '''
 for fn, page, title, desc in pages:
     with open(os.path.join(root, fn), 'w') as f:
+        ex = extra.get(page, {})
         f.write(tpl.format(title=title, desc=desc, page=page, dark='',
-                           scripts='\n'.join('<script src="%s"></script>' % s for s in scripts)))
+                           extra_css=''.join('<link rel="stylesheet" href="%s">\n' % c for c in ex.get('css', [])),
+                           scripts='\n'.join('<script src="%s"></script>' % s for s in ex.get('js', []) + scripts)))
 print('written', len(pages))

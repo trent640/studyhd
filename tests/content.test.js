@@ -75,6 +75,11 @@ test('challenge reference solutions pass and starters fail', () => {
       assert.ok(c.tests.every((t) => t.name && typeof t.check === 'function'), c.id + ' checks');
       continue;
     }
+    if (c.kind === 'sql' || c.kind === 'java') {
+      // SQL runs in SQLite and Java in javac/java: both are checked for real by tests/server.test.js.
+      assert.ok(c.kind === 'sql' ? c.schema && c.expected && c.starter && c.solution : c.javaTests && c.javaStarter && c.javaSolution, c.id + ' fields');
+      continue;
+    }
     assert.equal(passes(c, c.solution), c.tests.length, c.id + ' solution');
     assert.ok(passes(c, c.starter) < c.tests.length, c.id + ' starter should not pass');
     assert.ok(c.java && c.hint && c.complexity, c.id + ' extras');

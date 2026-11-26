@@ -9,6 +9,10 @@
      DATA_DIR         where member accounts are stored, default ./data
      COOKIE_SECURE    "1" to mark session cookies Secure (set when served over HTTPS)
      TRUST_PROXY      "1" when behind a reverse proxy that sets X-Forwarded-For/-Proto
+     CODE_RUNNER      who may compile and run Java on this server:
+                        auto (default) - the admin always; members only when the Linux sandbox works
+                        off            - nobody
+                        all            - every logged-in user, even without a sandbox (not recommended)
 */
 'use strict';
 
@@ -30,12 +34,12 @@ const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_FAILS = 10;
 
 const CSP = [
-  "default-src 'self'", "script-src 'self' blob: 'unsafe-eval'", 'worker-src blob:',
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net", 'font-src https://fonts.gstatic.com https://cdn.jsdelivr.net',
+  "default-src 'self'", "script-src 'self' blob: 'unsafe-eval' 'wasm-unsafe-eval'", 'worker-src blob:',
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data:", "connect-src 'self'", "form-action 'self'", "base-uri 'none'",
   "object-src 'none'", "frame-ancestors 'none'",
 ].join('; ');
-const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm', '.woff2': 'font/woff2' };
 
 /* ---------- .env loading (simple KEY=VALUE lines; real environment wins) ---------- */
 function loadEnvFile(file) {
@@ -67,15 +71,18 @@ async function verifyPassword(password, stored) {
 function createUserStore(dataDir) {
   const file = path.join(dataDir, 'users.json');
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  let users = {};
-  try { users = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { users = {}; }
+  const users = Object.create(null);
+  try {
+    const loaded = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const k of Object.keys(loaded)) users[k] = loaded[k];
+  } catch (e) { /* new store */ }
   const save = () => {
     const tmp = file + '.' + process.pid + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(users, null, 2), { mode: 0o600 });
     fs.renameSync(tmp, file);
   };
   return {
-    get: (name) => users[name.toLowerCase()] || null,
+    get: (name) => (Object.prototype.hasOwnProperty.call(users, name.toLowerCase()) ? users[name.toLowerCase()] : null),
     add(user) { users[user.username.toLowerCase()] = user; save(); },
     update(name, patch) { Object.assign(users[name.toLowerCase()], patch); save(); },
   };
@@ -101,6 +108,58 @@ function createForumStore(dataDir) {
   };
 }
 
+/* ---------- Java code runner ----------
+   Learners' Java is compiled and run in a throw-away folder. On Linux it runs inside a sandbox made with
+   unshare: its own user, process and network namespaces (so no network, and every child process dies with it),
+   with this project folder, the data folder and the home folder hidden behind empty tmpfs mounts.
+   prlimit caps CPU time and file size, the JVM heap is capped, and a wall-clock timeout kills the whole run. */
+const { spawn, spawnSync } = require('node:child_process');
+const os = require('node:os');
+const RUN_TIMEOUT_MS = 15000;
+const RUN_OUTPUT_LIMIT = 64 * 1024;
+const RUN_SCRIPT = 'for d in "$@"; do if [ -d "$d" ]; then mount -t tmpfs none "$d" || exit 97; fi; done; cd "$SD_WORK" || exit 98; '
+  + 'javac -d . -proc:none -Xlint:none -encoding UTF-8 *.java || exit 90; '
+  + 'exec java -Xmx256m -Xss1m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxMetaspaceSize=128m -Dfile.encoding=UTF-8 -Djava.io.tmpdir=. -cp . Main';
+function probe(cmd, args) {
+  try { return spawnSync(cmd, args, { timeout: 8000, stdio: 'ignore', env: { PATH: process.env.PATH } }).status === 0; } catch (e) { return false; }
+}
+function detectRunner() {
+  const java = probe('javac', ['-version']) && probe('java', ['-version']) && probe('sh', ['-c', 'true']);
+  const sandbox = java && process.platform === 'linux'
+    && probe('unshare', ['-rmn', '--pid', '--fork', '--mount-proc', '--kill-child', 'prlimit', '--cpu=5', 'sh', '-c', 'mount -t tmpfs none /mnt']);
+  return { java, sandbox };
+}
+function runJava(files, hideDirs, sandboxed) {
+  return new Promise((resolve) => {
+    const work = fs.mkdtempSync(path.join(os.platform() === 'win32' ? os.tmpdir() : '/tmp', 'sd-run-'));
+    for (const [name, code] of Object.entries(files)) fs.writeFileSync(path.join(work, name), code);
+    const env = { PATH: process.env.PATH, LANG: 'C.UTF-8', HOME: work, SD_WORK: work };
+    const args = sandboxed
+      ? ['unshare', ['-rmn', '--pid', '--fork', '--mount-proc', '--kill-child', 'prlimit', '--cpu=10', '--fsize=10485760', 'sh', '-c', RUN_SCRIPT, 'sh', ...hideDirs]]
+      : ['sh', ['-c', RUN_SCRIPT, 'sh']];
+    const started = Date.now();
+    const child = spawn(args[0], args[1], { cwd: work, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '', timedOut = false, finished = false;
+    const take = (buf, add) => (buf.length >= RUN_OUTPUT_LIMIT ? buf : (buf + add).slice(0, RUN_OUTPUT_LIMIT));
+    child.stdout.on('data', (d) => { stdout = take(stdout, d.toString('utf8')); });
+    child.stderr.on('data', (d) => { stderr = take(stderr, d.toString('utf8')); });
+    const kill = () => { try { process.kill(-child.pid, 'SIGKILL'); } catch (e) { try { child.kill('SIGKILL'); } catch (e2) { /* gone */ } } };
+    const timer = setTimeout(() => { timedOut = true; kill(); }, RUN_TIMEOUT_MS);
+    const done = (code) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      kill();
+      fs.rm(work, { recursive: true, force: true }, () => {});
+      const clean = (t) => t.split(work + path.sep).join('').split(work).join('.').replace(/^Picked up .*\n/gm, '');
+      const ms = Date.now() - started;
+      resolve({ compiled: code !== 90, exitCode: code, timedOut: timedOut || (code !== 0 && ms >= 9500), timeMs: ms, stdout: clean(stdout), stderr: clean(stderr) });
+    };
+    child.on('error', () => done(-1));
+    child.on('close', (code) => done(code));
+  });
+}
+
 /* ---------- App ---------- */
 async function createApp(options = {}) {
   const adminUsername = (options.adminUsername ?? process.env.ADMIN_USERNAME ?? '').trim();
@@ -111,6 +170,10 @@ async function createApp(options = {}) {
   const store = createUserStore(dataDir);
   const forum = createForumStore(dataDir);
   const postTimes = new Map(); // username -> [timestamps] for posting rate limits
+  const runPolicy = String(options.codeRunner ?? process.env.CODE_RUNNER ?? 'auto').toLowerCase();
+  const runner = runPolicy === 'off' ? { java: false, sandbox: false } : (options.runnerDetect || detectRunner)();
+  const runTimes = new Map(); // username -> [timestamps]
+  let activeRuns = 0;
   const log = options.log || ((msg) => console.log(msg));
 
   // The admin password is hashed in memory at start-up and never written anywhere.
@@ -122,29 +185,50 @@ async function createApp(options = {}) {
   } else {
     log('Admin account disabled: set ADMIN_USERNAME and ADMIN_PASSWORD to enable it.');
   }
+  if (runner.java) log(`Java runner: ${runner.sandbox ? 'sandboxed' : 'NOT sandboxed'}; policy "${runPolicy}" (${runPolicy === 'all' ? 'all logged-in users' : runner.sandbox ? 'admin and members' : 'admin only'}).`);
+  else log('Java runner: unavailable (' + (runPolicy === 'off' ? 'CODE_RUNNER=off' : 'no JDK found') + ').');
   const isAdminName = (name) => !!adminUsername && name.toLowerCase() === adminUsername.toLowerCase();
   const dummyHash = await hashPassword(crypto.randomBytes(16).toString('hex'));
 
   const sessions = new Map(); // token -> { username, role, expires }
   const failures = new Map(); // ip -> [timestamps]
+  const userFailures = new Map(); // lowercased username -> [timestamps]
+  const registrations = new Map(); // ip -> [timestamps]
+  const reportMinAgeMs = options.reportMinAgeMs ?? 10 * 60 * 1000;
+  const recent = (map, key, windowMs) => {
+    const now = Date.now();
+    const list = (map.get(key) || []).filter((t) => now - t < windowMs);
+    if (list.length) map.set(key, list); else map.delete(key);
+    return list;
+  };
+  // Periodically drop expired sessions and old rate-limit entries so memory cannot grow without bound.
+  const sweeper = setInterval(() => {
+    const now = Date.now();
+    for (const [t, sess] of sessions) if (sess.expires < now) sessions.delete(t);
+    for (const map of [failures, userFailures, registrations, postTimes, runTimes]) for (const k of [...map.keys()]) recent(map, k, 60 * 60 * 1000);
+  }, 10 * 60 * 1000);
+  sweeper.unref();
 
   function clientIp(req) {
     if (trustProxy && req.headers['x-forwarded-for']) return String(req.headers['x-forwarded-for']).split(',')[0].trim();
     return req.socket.remoteAddress || 'unknown';
   }
-  function tooManyFailures(ip) {
-    const now = Date.now();
-    const list = (failures.get(ip) || []).filter((t) => now - t < LOGIN_WINDOW_MS);
-    failures.set(ip, list);
-    return list.length >= LOGIN_MAX_FAILS;
+  function tooManyFailures(ip, username) {
+    return recent(failures, ip, LOGIN_WINDOW_MS).length >= LOGIN_MAX_FAILS
+      || recent(userFailures, username.toLowerCase(), LOGIN_WINDOW_MS).length >= LOGIN_MAX_FAILS * 2;
   }
-  function recordFailure(ip) { (failures.get(ip) || failures.set(ip, []).get(ip)).push(Date.now()); }
+  function recordFailure(ip, username) {
+    failures.set(ip, [...recent(failures, ip, LOGIN_WINDOW_MS), Date.now()]);
+    const u = username.toLowerCase();
+    userFailures.set(u, [...recent(userFailures, u, LOGIN_WINDOW_MS), Date.now()]);
+  }
 
   function parseCookies(req) {
-    const out = {};
+    const out = Object.create(null);
     for (const part of String(req.headers.cookie || '').split(';')) {
       const i = part.indexOf('=');
-      if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+      if (i <= 0) continue;
+      try { out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch (e) { /* ignore malformed cookie */ }
     }
     return out;
   }
@@ -160,6 +244,8 @@ async function createApp(options = {}) {
     return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSec}` + (cookieSecure ? '; Secure' : '');
   }
   function startSession(res, username, role) {
+    const mine = [...sessions].filter(([, sess]) => sess.username === username).sort((a, b) => a[1].expires - b[1].expires);
+    while (mine.length >= 20) sessions.delete(mine.shift()[0]);
     const token = crypto.randomBytes(32).toString('hex');
     sessions.set(token, { username, role, expires: Date.now() + SESSION_TTL_MS });
     res.setHeader('Set-Cookie', sessionCookie(token, SESSION_TTL_MS / 1000));
@@ -174,18 +260,20 @@ async function createApp(options = {}) {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    if (cookieSecure) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
   function sendJson(res, status, body) {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(body));
   }
-  function readJson(req) {
+  function readJson(req, limit = MAX_BODY) {
     return new Promise((resolve, reject) => {
       let size = 0;
       const chunks = [];
       req.on('data', (c) => {
         size += c.length;
-        if (size > MAX_BODY) { reject(Object.assign(new Error('Request too large.'), { status: 413 })); req.destroy(); return; }
+        if (size > limit) { reject(Object.assign(new Error('Request too large.'), { status: 413 })); req.destroy(); return; }
         chunks.push(c);
       });
       req.on('end', () => {
@@ -207,19 +295,20 @@ async function createApp(options = {}) {
   async function api(req, res, route) {
     const session = getSession(req);
     if (req.method === 'GET' && route === '/api/me') return sendJson(res, 200, { user: session ? publicUser(session) : null });
+    if (req.method === 'GET' && route === '/api/runner') return sendJson(res, 200, runnerInfo(session));
     if (req.method === 'GET' && route === '/api/posts') return sendJson(res, 200, { posts: listPosts(session), guidelinesVersion: 1 });
 
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed.' });
     if (!sameOrigin(req)) return sendJson(res, 403, { error: 'Cross-site request refused.' });
     if (!String(req.headers['content-type'] || '').startsWith('application/json')) return sendJson(res, 415, { error: 'Send JSON.' });
-    const body = await readJson(req);
+    const body = await readJson(req, route === '/api/run' ? 64 * 1024 : MAX_BODY);
     const str = (v) => (typeof v === 'string' ? v : '');
 
     if (route === '/api/login') {
       const ip = clientIp(req);
-      if (tooManyFailures(ip)) return sendJson(res, 429, { error: 'Too many failed attempts. Try again in 15 minutes.' });
-      const username = str(body.username).trim();
+      const username = str(body.username).trim().slice(0, 64);
       const password = str(body.password);
+      if (tooManyFailures(ip, username)) return sendJson(res, 429, { error: 'Too many failed attempts. Try again in 15 minutes.' });
       if (!username || !password) return sendJson(res, 400, { error: 'Enter your username and password.' });
       let ok = false, role = 'member', name = username;
       if (isAdminName(username) && adminHash) {
@@ -230,7 +319,7 @@ async function createApp(options = {}) {
         ok = await verifyPassword(password, user ? user.passwordHash : dummyHash) && !!user;
         if (user) name = user.username;
       }
-      if (!ok) { recordFailure(ip); return sendJson(res, 401, { error: 'Incorrect username or password.' }); }
+      if (!ok) { recordFailure(ip, username); return sendJson(res, 401, { error: 'Incorrect username or password.' }); }
       startSession(res, name, role);
       return sendJson(res, 200, { user: { username: name, role } });
     }
@@ -243,6 +332,9 @@ async function createApp(options = {}) {
       if (store.get(username)) return sendJson(res, 409, { error: 'That username is taken.' });
       if (password.length < MIN_PASSWORD) return sendJson(res, 400, { error: `Password must be at least ${MIN_PASSWORD} characters.` });
       if (password.length > 200) return sendJson(res, 400, { error: 'Password is too long.' });
+      const regIp = clientIp(req);
+      if (recent(registrations, regIp, 60 * 60 * 1000).length >= (options.maxRegistrationsPerHour ?? 5)) return sendJson(res, 429, { error: 'Too many new accounts from this network. Try again later.' });
+      registrations.set(regIp, [...recent(registrations, regIp, 60 * 60 * 1000), Date.now()]);
       store.add({ username, role: 'member', passwordHash: await hashPassword(password), createdAt: Date.now() });
       startSession(res, username, 'member');
       return sendJson(res, 201, { user: { username, role: 'member' } });
@@ -269,7 +361,38 @@ async function createApp(options = {}) {
     }
 
     if (route.startsWith('/api/posts')) return forumApi(req, res, route, session, body);
+    if (route === '/api/run') return runApi(res, session, body);
     return sendJson(res, 404, { error: 'Not found.' });
+  }
+
+  /* ---------- Java runner API ---------- */
+  function runnerInfo(sess) {
+    if (!runner.java) return { java: false, reason: runPolicy === 'off' ? 'Running Java is switched off on this server.' : 'This server has no Java Development Kit (JDK) installed.' };
+    if (!sess) return { java: false, reason: 'Log in to run Java code.' };
+    const allowed = isAdminSession(sess) || runPolicy === 'all' || runner.sandbox;
+    return allowed ? { java: true, sandboxed: runner.sandbox } : { java: false, reason: 'Running Java needs a sandbox this server does not have, so it is limited to the admin.' };
+  }
+  async function runApi(res, sess, body) {
+    const info = runnerInfo(sess);
+    if (!info.java) return sendJson(res, 403, { error: info.reason });
+    const files = body && typeof body.files === 'object' && body.files ? body.files : {};
+    const names = Object.keys(files);
+    if (!names.length || names.length > 4 || !names.includes('Main.java')) return sendJson(res, 400, { error: 'Send Main.java and up to three other files.' });
+    let total = 0;
+    for (const n of names) {
+      if (!/^[A-Z][A-Za-z0-9]{0,40}\.java$/.test(n) || typeof files[n] !== 'string') return sendJson(res, 400, { error: 'Invalid file name.' });
+      total += files[n].length;
+    }
+    if (total > 48 * 1024) return sendJson(res, 413, { error: 'The code is too long (48 KB maximum).' });
+    const recentRuns = (runTimes.get(sess.username) || []).filter((t) => Date.now() - t < 60000);
+    if (recentRuns.length >= (options.runRateLimit ?? 15)) return sendJson(res, 429, { error: 'You are running code very often. Wait a minute and try again.' });
+    if (activeRuns >= 2) return sendJson(res, 503, { error: 'The code runner is busy. Try again in a few seconds.' });
+    runTimes.set(sess.username, [...recentRuns, Date.now()]);
+    activeRuns++;
+    try {
+      const hide = [...new Set([ROOT, path.resolve(dataDir), os.homedir()])].filter((d) => d && d !== '/' && !'/tmp'.startsWith(d));
+      return sendJson(res, 200, await runJava(files, hide, runner.sandbox));
+    } finally { activeRuns--; }
   }
 
   /* ---------- Forum ---------- */
@@ -313,6 +436,7 @@ async function createApp(options = {}) {
       if (module && !/^[a-z0-9-]{1,40}$/.test(module)) return sendJson(res, 400, { error: 'Unknown module.' });
       if (body.agreed !== true) return sendJson(res, 400, { error: 'Please agree to the community guidelines first.' });
       if (postLimitReached(session.username)) return sendJson(res, 429, { error: 'You are posting very quickly. Please wait a while.' });
+      if (forum.all().length >= 5000) return sendJson(res, 507, { error: 'The forum is full. Ask a moderator to tidy up old discussions.' });
       const post = { id: crypto.randomBytes(8).toString('hex'), title, body: text, module, author: session.username,
         anonymous: body.anonymous === true, createdAt: Date.now(), reports: [], hidden: false, replies: [] };
       forum.add(post);
@@ -328,6 +452,7 @@ async function createApp(options = {}) {
         if (body.agreed !== true) return sendJson(res, 400, { error: 'Please agree to the community guidelines first.' });
         if (postLimitReached(session.username)) return sendJson(res, 429, { error: 'You are posting very quickly. Please wait a while.' });
         post.replies = post.replies || [];
+        if (post.replies.length >= 300) return sendJson(res, 400, { error: 'This discussion has reached its reply limit. Start a new one.' });
         post.replies.push({ id: crypto.randomBytes(8).toString('hex'), body: text, author: session.username, anonymous: body.anonymous === true, createdAt: Date.now() });
         forum.save();
         return sendJson(res, 201, { ok: true });
@@ -336,7 +461,9 @@ async function createApp(options = {}) {
         if (post.author === session.username) return sendJson(res, 400, { error: 'You cannot report your own post.' });
         post.reports = post.reports || [];
         if (!post.reports.includes(session.username)) post.reports.push(session.username);
-        if (post.reports.length >= REPORTS_TO_HIDE) post.hidden = true;
+        // Only established accounts count towards automatic hiding, so new throwaway accounts cannot hide posts.
+        const established = post.reports.filter((u) => { const acc = store.get(u); return isAdminName(u) || (acc && Date.now() - acc.createdAt >= reportMinAgeMs); });
+        if (isAdminSession(session) || established.length >= REPORTS_TO_HIDE) post.hidden = true;
         forum.save();
         return sendJson(res, 200, { ok: true, hidden: post.hidden });
       }
@@ -368,7 +495,11 @@ async function createApp(options = {}) {
   function serveStatic(req, res, pathname) {
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
     if (pathname === '/') pathname = '/index.html';
-    const allowed = /^\/[a-z-]+\.html$/.test(pathname) || /^\/css\/[a-z0-9-]+\.css$/.test(pathname) || /^\/js\/(content\/)?[a-z0-9-]+\.js$/.test(pathname);
+    const allowed = /^\/[a-z-]+\.html$/.test(pathname)
+      || /^\/(css|js\/vendor\/codemirror)\/[a-z0-9-]+\.css$/.test(pathname)
+      || /^\/js\/(content\/|vendor\/codemirror\/|vendor\/sqljs\/)?[a-z0-9-]+\.js$/.test(pathname)
+      || pathname === '/js/vendor/sqljs/sql-wasm.wasm'
+      || /^\/fonts\/[a-z0-9-]+\.woff2$/.test(pathname);
     const file = path.join(ROOT, pathname);
     if (!allowed || !file.startsWith(ROOT + path.sep)) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not found'); }
     fs.readFile(file, (err, data) => {
@@ -391,7 +522,11 @@ async function createApp(options = {}) {
       if (!err.status) log('Error: ' + err.message);
     }
   });
-  return { server, adminEnabled: !!adminHash };
+  server.headersTimeout = 20000;
+  server.requestTimeout = 30000;
+  server.keepAliveTimeout = 5000;
+  server.on('close', () => clearInterval(sweeper));
+  return { server, adminEnabled: !!adminHash, runner: { ...runner, policy: runPolicy } };
 }
 
 if (require.main === module) {

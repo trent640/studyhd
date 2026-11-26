@@ -318,7 +318,9 @@
     get(pid) { return store.get(userKey('projects'), {})[pid] || { stories: {}, repo: '' }; },
     set(pid, value) { const all = store.get(userKey('projects'), {}); all[pid] = value; store.set(userKey('projects'), all); },
     count(p) { const s = this.get(p.id).stories; return p.stories.filter((_, i) => s[i]).length; },
-    complete(p) { return this.count(p) === p.stories.length; },
+    checksPassed(p) { return (p.checks || []).filter((id) => Solved.has(id)).length; },
+    // A project is complete when every user story is ticked AND every automated check passes.
+    complete(p) { return this.count(p) === p.stories.length && this.checksPassed(p) === (p.checks || []).length; },
   };
   const Solved = {
     all() { return store.get(userKey('solved'), {}); },
@@ -356,16 +358,13 @@
   /* ================= Comfort settings ================= */
   const SETTINGS_KEY = 'sd:settings';
   const DEFAULT_SETTINGS = { textSize: 'm', font: 'default', spacing: 'normal', theme: 'light', calm: false, reduceMotion: false, breakMinutes: 25, dailyGoal: 3, showTimes: true, view: 'detailed', focusMinutes: 25, showPoints: true };
-  // OpenDyslexic is only downloaded when someone chooses it.
+  // OpenDyslexic is served from this site (fonts/) and only downloaded when someone chooses it.
   function loadDyslexicFont() {
     if (document.getElementById('font-opendyslexic')) return;
-    ['index.css', '700.css'].forEach((f, i) => {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      if (i === 0) link.id = 'font-opendyslexic';
-      link.href = 'https://cdn.jsdelivr.net/npm/@fontsource/opendyslexic@5.3.0/' + f;
-      document.head.appendChild(link);
-    });
+    const style = document.createElement('style');
+    style.id = 'font-opendyslexic';
+    style.textContent = [400, 700].map((w) => `@font-face{font-family:'OpenDyslexic';font-style:normal;font-display:swap;font-weight:${w};src:url(fonts/opendyslexic-latin-${w}-normal.woff2) format('woff2');}`).join('');
+    document.head.appendChild(style);
   }
   const Settings = {
     get() { return { ...DEFAULT_SETTINGS, ...store.get(SETTINGS_KEY, {}) }; },
@@ -561,7 +560,8 @@
     </div>`;
   }
   function taskItem(t, compact) {
-    const label = t.link ? `<a href="${esc(t.link)}">${esc(t.text)}</a>` : esc(t.text);
+    const safeLink = /^[a-z]+\.html(\?[a-z0-9=&_-]*)?$/i.test(t.link || '') ? t.link : '';
+    const label = safeLink ? `<a href="${esc(safeLink)}">${esc(t.text)}</a>` : esc(t.text);
     return `<li class="task${t.done ? ' done' : ''}" data-task="${esc(t.id)}">
       <input type="checkbox" id="task-${esc(t.id)}" ${t.done ? 'checked' : ''} aria-label="Done: ${esc(t.text)}">
       <span class="task-text">${label}</span>
@@ -1389,24 +1389,45 @@
 
   /* ================= Practice (challenge bank) ================= */
   const LEVELS = ['Warm-up', 'Easy', 'Medium'];
+  const LANG_LABEL = { javascript: 'JavaScript', java: 'Java', sql: 'SQL', html: 'HTML/CSS' };
   let practiceFilter = 'All';
+  let languageFilter = 'All';
+  // Which languages a challenge can be solved in, each checked by real tests.
+  function challengeLangs(c) {
+    if (c.kind === 'html') return ['html'];
+    if (c.kind === 'sql') return ['sql'];
+    if (c.kind === 'java') return ['java'];
+    return c.javaTests ? ['javascript', 'java'] : ['javascript'];
+  }
+  // Ask the server once whether this user may compile and run Java.
+  let runnerInfoCache = null;
+  function getRunnerInfo() {
+    if (!runnerInfoCache) {
+      runnerInfoCache = fetch('/api/runner', { credentials: 'same-origin' })
+        .then((r) => (r.ok ? r.json() : { java: false, reason: 'Running Java needs the Study Desk server. Start it with "npm start".' }))
+        .catch(() => ({ java: false, reason: 'Running Java needs the Study Desk server. Start it with "npm start".' }));
+    }
+    return runnerInfoCache;
+  }
   function renderPractice() {
     const id = params.get('c');
     if (id) return renderChallenge(id);
     const solvedCount = CHALLENGES.filter((c) => Solved.has(c.id)).length;
-    const list = CHALLENGES.filter((c) => practiceFilter === 'All' || c.level === practiceFilter);
+    const list = CHALLENGES.filter((c) => (practiceFilter === 'All' || c.level === practiceFilter) && (languageFilter === 'All' || challengeLangs(c).includes(languageFilter)));
     setPage(`<div class="page"><div class="container">
       ${pageHead({ crumbs: [['index.html', 'Home'], [null, 'Practice']], title: 'Coding challenges',
-        desc: 'Problems in the style of the HackerRank and Codility tests used by Irish employers. Write JavaScript in the browser and run the tests. Each one has hints and a reference solution in JavaScript and Java.',
+        desc: 'Write your own solution in the editor and run it against automated tests: JavaScript, HTML and CSS, and SQL run in your browser; Java is compiled and run on the Study Desk server. Your code is checked by tests, not compared with a fixed answer.',
         actions: '<button class="btn small" type="button" data-action="focus">Pomodoro timer</button>',
         extra: `<div class="progress-line"><span class="progress-badge">${solvedCount}/${CHALLENGES.length}</span><span class="progress-text">challenges solved</span>${bar(Math.round((solvedCount / CHALLENGES.length) * 100), 'Challenges solved')}</div>` })}
-      <div class="chip-row left" role="group" aria-label="Filter by level">${['All', ...LEVELS].map((l) => `<button type="button" class="chip light${l === practiceFilter ? ' active' : ''}" data-level="${l}" aria-pressed="${l === practiceFilter}">${l}</button>`).join('')}</div>
+      <div class="chip-row left" role="group" aria-label="Filter by level">${['All', ...LEVELS].map((l) => `<button type="button" class="chip light${l === practiceFilter ? ' active' : ''}" data-level="${l}" aria-pressed="${l === practiceFilter}">${l === 'All' ? 'All levels' : l}</button>`).join('')}</div>
+      <div class="chip-row left" role="group" aria-label="Filter by language">${['All', 'javascript', 'java', 'sql', 'html'].map((l) => `<button type="button" class="chip light${l === languageFilter ? ' active' : ''}" data-lang="${l}" aria-pressed="${l === languageFilter}">${l === 'All' ? 'All languages' : LANG_LABEL[l]}</button>`).join('')}</div>
       <div class="challenge-list">${list.map((c) => `<a class="challenge-row" href="practice.html?c=${c.id}">
           <span class="proj-check ${Solved.has(c.id) ? 'done' : ''}" aria-hidden="true">${Solved.has(c.id) ? '✓' : ''}</span>
           <span class="challenge-main"><b>${esc(c.title)}</b><small>${esc(c.pattern)} · ${esc(byId(c.module).title)}</small></span>
+          <span class="lang-tags">${challengeLangs(c).map((l) => `<span class="lang-tag">${LANG_LABEL[l]}</span>`).join('')}</span>
           <span class="level ${c.level.toLowerCase()}">${c.level}</span>
           ${timeTag(c.minutes)}
-          ${Solved.has(c.id) ? '<span class="sr-only">Solved</span>' : ''}</a>`).join('')}</div>
+          ${Solved.has(c.id) ? '<span class="sr-only">Solved</span>' : ''}</a>`).join('') || '<p class="hint-text">No challenges match these filters.</p>'}</div>
       <div class="h-section">Quick checks <span>No code, just reasoning</span></div>
       <div class="grid-2">
         <div class="card"><div class="kicker">Object-oriented design</div><h3>Give each class one job</h3>
@@ -1416,63 +1437,123 @@
           <p>For a sorted array, one search method repeatedly halves the remaining range.</p>
           ${quizBlock('bsearch', 'Which search method is it?', [{ text: 'Depth-first search', i: 0 }, { text: 'Binary search', i: 1 }, { text: 'Linear search', i: 2 }], 1)}</div>
       </div>
-      <div class="h-section">Java: predict the output <span>Read the code, then choose what it prints</span></div>
-      <div class="grid-2">
-        <div class="card"><div class="kicker">Java strings</div>
-          <pre class="code"><code>${esc('String a = new String("hi");\nString b = "hi";\nSystem.out.println(a == b);\nSystem.out.println(a.equals(b));')}</code></pre>
-          ${quizBlock('java-eq', 'What does it print?', [{ text: 'false then true', i: 0 }, { text: 'true then true', i: 1 }, { text: 'false then false', i: 2 }], 0)}</div>
-        <div class="card"><div class="kicker">Java integer division</div>
-          <pre class="code"><code>${esc('int lessons = 7;\nint days = 2;\nSystem.out.println(lessons / days);\nSystem.out.println(lessons / (double) days);')}</code></pre>
-          ${quizBlock('java-div', 'What does it print?', [{ text: '3.5 then 3.5', i: 0 }, { text: '3 then 3.5', i: 1 }, { text: '3 then 3', i: 2 }], 1)}</div>
-        <div class="card"><div class="kicker">Spring Boot</div>
-          <pre class="code"><code>${esc('@Service\nclass Greeter {\n  String greet(String n) { return "Hi " + n; }\n}\n@RestController\nclass Hello {\n  private final Greeter g;\n  Hello(Greeter g) { this.g = g; }\n  @GetMapping("/hi") String hi() { return g.greet("Sosa"); }\n}')}</code></pre>
-          ${quizBlock('spring-di', 'What does GET /hi return?', [{ text: 'Hi Sosa', i: 0 }, { text: 'A NullPointerException, because Greeter is never created', i: 1 }, { text: '404 Not Found', i: 2 }], 0)}</div>
-        <div class="card"><div class="kicker">Java collections</div>
-          <pre class="code"><code>${esc('List<Integer> xs = new ArrayList<>(List.of(3, 1, 2));\nCollections.sort(xs);\nxs.add(0, 9);\nSystem.out.println(xs);')}</code></pre>
-          ${quizBlock('java-list', 'What does it print?', [{ text: '[9, 1, 2, 3]', i: 0 }, { text: '[1, 2, 3, 9]', i: 1 }, { text: '[9, 3, 1, 2]', i: 2 }], 0)}</div>
-      </div>
+      <div class="h-section">Java: predict the output <span>Read the code, choose an answer, then run it to see for yourself</span></div>
+      <div class="grid-2">${JAVA_PREDICT.map((q) => `<div class="card"><div class="kicker">${esc(q.kicker)}</div>
+          <pre class="code"><code>${esc(q.code)}</code></pre>
+          ${quizBlock(q.id, 'What does it print?', q.choices.map((t, i) => ({ text: t, i })), q.answer)}
+          <button class="btn small" type="button" data-runpredict="${q.id}">▶ Run it</button><pre class="code light predict-out" id="out-${q.id}" hidden></pre></div>`).join('')}</div>
     </div></div>`);
     $$('[data-level]', app).forEach((b) => b.addEventListener('click', () => { practiceFilter = b.dataset.level; renderPractice(); }));
+    $$('[data-lang]', app).forEach((b) => b.addEventListener('click', () => { languageFilter = b.dataset.lang; renderPractice(); }));
     wireQuizzes(app, {
       'oop-tax': { right: 'Tax rules live in TaxPolicy, so a rate change touches only that class.', wrong: 'Think about which class owns the tax rule. Cart should not need to change.' },
       bsearch: { right: 'Binary search halves the range each step, so it runs in O(log n).', wrong: 'That one does not use the sorted order. Which method halves the range?' },
-      'java-eq': { right: '== compares references (two different objects), equals compares the text.', wrong: 'Think about what == compares for objects.' },
-      'java-div': { right: 'int / int drops the remainder; casting one side to double keeps it.', wrong: 'Look at the types on each side of the division.' },
-      'spring-di': { right: 'Spring creates the Greeter bean and injects it through the constructor.', wrong: '@Service makes Spring create Greeter and pass it to the constructor.' },
-      'java-list': { right: 'Sorting gives [1, 2, 3]; add(0, 9) inserts 9 at the front.', wrong: 'add(index, value) inserts at that position.' },
+      ...Object.fromEntries(JAVA_PREDICT.map((q) => [q.id, { right: q.why, wrong: 'Not this one. Try again, or press Run it to see what Java prints.' }])),
     });
+    // "Run it": actually compile and run the snippet so the answer comes from Java, not from us.
+    $$('[data-runpredict]', app).forEach((b) => b.addEventListener('click', async () => {
+      const q = JAVA_PREDICT.find((x) => x.id === b.dataset.runpredict);
+      const out = $('#out-' + q.id);
+      out.hidden = false;
+      out.textContent = 'Running…';
+      const info = await getRunnerInfo();
+      if (!info.java) { out.textContent = info.reason; return; }
+      const r = await postRun({ 'Main.java': q.program });
+      out.textContent = r.error ? r.error : (r.compiled ? (r.stdout || '(no output)') : r.stderr);
+    }));
+  }
+  const JAVA_PREDICT = [
+    { id: 'java-eq', kicker: 'Java strings', answer: 0, choices: ['false then true', 'true then true', 'false then false'], why: '== compares references (two different objects); equals compares the text.',
+      code: 'String a = new String("hi");\nString b = "hi";\nSystem.out.println(a == b);\nSystem.out.println(a.equals(b));' },
+    { id: 'java-div', kicker: 'Java integer division', answer: 1, choices: ['3.5 then 3.5', '3 then 3.5', '3 then 3'], why: 'int / int drops the remainder; casting one side to double keeps it.',
+      code: 'int lessons = 7;\nint days = 2;\nSystem.out.println(lessons / days);\nSystem.out.println(lessons / (double) days);' },
+    { id: 'java-list', kicker: 'Java collections', answer: 0, choices: ['[9, 1, 2, 3]', '[1, 2, 3, 9]', '[9, 3, 1, 2]'], why: 'Sorting gives [1, 2, 3]; add(0, 9) inserts 9 at the front.',
+      code: 'List<Integer> xs = new ArrayList<>(List.of(3, 1, 2));\nCollections.sort(xs);\nxs.add(0, 9);\nSystem.out.println(xs);' },
+    { id: 'java-char', kicker: 'Java chars and ints', answer: 2, choices: ['ab', 'a1', '195'], why: "Two chars added together are numbers: 'a' is 97 and 'b' is 98.",
+      code: "char x = 'a';\nchar y = 'b';\nSystem.out.println(x + y);" },
+  ].map((q) => ({ ...q, program: 'import java.util.*;\n\npublic class Main {\n    public static void main(String[] args) {\n' + q.code.split('\n').map((l) => '        ' + l).join('\n') + '\n    }\n}\n' }));
+
+  async function postRun(files) {
+    try {
+      const res = await fetch('/api/run', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files }) });
+      const data = await res.json().catch(() => ({}));
+      return res.ok ? data : { error: data.error || 'The code runner is not available.' };
+    } catch (e) { return { error: 'Could not reach the Study Desk server.' }; }
+  }
+
+  /* ---------- Code editor (CodeMirror when available, plain textarea otherwise) ---------- */
+  let editor = null;
+  const CM_MODE = { javascript: 'javascript', java: 'text/x-java', sql: 'text/x-sqlite', html: 'htmlmixed' };
+  function createEditor(textarea, lang, onRun, onChange) {
+    if (!window.CodeMirror) {
+      textarea.addEventListener('input', onChange);
+      textarea.addEventListener('keydown', (e) => {
+        if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); textarea.setRangeText('  ', textarea.selectionStart, textarea.selectionEnd, 'end'); onChange(); }
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onRun(); }
+      });
+      return { getValue: () => textarea.value, setValue: (v) => { textarea.value = v; onChange(); }, focus: () => textarea.focus() };
+    }
+    const cm = window.CodeMirror.fromTextArea(textarea, {
+      mode: CM_MODE[lang], lineNumbers: true, matchBrackets: true, autoCloseBrackets: true,
+      indentUnit: lang === 'java' ? 4 : 2, tabSize: 4, indentWithTabs: false, inputStyle: 'contenteditable', spellcheck: false,
+      extraKeys: {
+        'Ctrl-Enter': onRun, 'Cmd-Enter': onRun,
+        Tab: (ed) => (ed.somethingSelected() ? ed.indentSelection('add') : ed.replaceSelection(' '.repeat(ed.getOption('indentUnit')), 'end')),
+        'Shift-Tab': (ed) => ed.indentSelection('subtract'),
+        // Keyboard users can always leave the editor: Esc moves focus to the Run button.
+        Esc: () => { const b = $('#runChallenge'); if (b) b.focus(); },
+      },
+    });
+    cm.getWrapperElement().setAttribute('aria-label', LANG_LABEL[lang] + ' code editor. Press Escape to leave the editor.');
+    cm.on('change', onChange);
+    return { getValue: () => cm.getValue(), setValue: (v) => cm.setValue(v), focus: () => cm.focus(), cm };
   }
 
   function renderChallenge(id) {
     const c = challengeById(id);
     if (!c) return renderNotFound();
+    const langs = challengeLangs(c);
+    const saved = store.get('sd:lang:' + c.id, null) || store.get('sd:prefLang', null);
+    const lang = langs.includes(saved) ? saved : langs[0];
     const drafts = store.get(userKey('drafts'), {});
+    const draftKey = lang === 'javascript' || lang === 'html' ? c.id : c.id + ':' + lang;
+    const starter = lang === 'java' ? c.javaStarter : c.starter;
+    const tests = lang === 'java' ? c.javaTests : lang === 'sql' ? [{ name: 'returns the columns: ' + c.expected.columns.join(', ') }, { name: `returns the right ${c.expected.rows.length} row${c.expected.rows.length === 1 ? '' : 's'}${c.ordered ? ' in the right order' : ''}` }] : c.tests;
     const idx = CHALLENGES.indexOf(c);
     const next = CHALLENGES[idx + 1];
+    const fromProject = PROJECTS.find((p) => p.id === params.get('from'));
+    const refSolution = lang === 'java' ? (c.javaSolution || c.java) : c.solution;
+    const altSolution = lang === 'java' ? c.solution : (c.kind === 'html' ? c.java : (c.javaSolution || c.java));
+    const altLabel = lang === 'java' ? 'JavaScript' : c.kind === 'html' ? 'React / Tailwind' : c.kind === 'sql' ? '' : (/^\s*(static|class|public|import)/.test(c.javaSolution || c.java || '') ? 'Java' : 'In practice');
     document.title = c.title + ' · Practice · Study Desk';
     setPage(`<div class="page"><div class="container wide">
-      <nav class="crumbs" aria-label="Breadcrumb"><a href="practice.html">Practice</a> › <span>${esc(c.title)}</span></nav>
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="practice.html">Practice</a>${fromProject ? ` › <a href="projects.html?p=${fromProject.id}">${esc(fromProject.title)}</a>` : ''} › <span>${esc(c.title)}</span></nav>
       <div class="challenge-layout">
         <section class="card readable" aria-labelledby="chTitle">
           <div class="kicker">${esc(c.pattern)} · <a href="${lessonUrl(c.module, 0)}">${esc(byId(c.module).title)}</a></div>
           <h1 id="chTitle" class="ch-title">${esc(c.title)} <span class="level ${c.level.toLowerCase()}">${c.level}</span></h1>
           ${timeTag(c.minutes)}
           <p>${esc(c.prompt)}</p>
-          <h4>Examples</h4>
-          <pre class="code light">${c.examples.map(esc).join('\n')}</pre>
-          ${c.kind === 'html' ? '<h4>What to write</h4><p>HTML (and CSS in a &lt;style&gt; block). The preview updates as you type.</p>' : `<h4>Function to write</h4><p><code class="inline">${esc(c.fn)}</code></p>`}
+          ${(c.examples || []).length ? `<h4>Examples</h4><pre class="code light">${c.examples.map(esc).join('\n')}</pre>` : ''}
+          ${c.kind === 'sql' ? `<details class="reveal"><summary>Show the tables and data</summary><pre class="code light">${esc(c.schema.replace(/;\s*/g, ';\n'))}</pre></details>` : ''}
+          ${c.kind === 'html' ? '<h4>What to write</h4><p>HTML (and CSS in a &lt;style&gt; block). The preview updates as you type.</p>'
+            : lang === 'java' ? `<h4>What to write</h4><p>Java ${c.kind === 'java' ? 'class' : 'method'} <code class="inline">${esc(c.kind === 'java' ? c.fn : 'Solution.' + c.fn)}</code>. The tests call your code directly.</p>`
+            : c.kind === 'sql' ? '<h4>What to write</h4><p>One SQL query. It runs on SQLite in your browser; this SQL works the same in MySQL.</p>'
+            : `<h4>Function to write</h4><p><code class="inline">${esc(c.fn)}</code></p>`}
           <details class="reveal"><summary>Show a hint</summary><p style="margin:0">${esc(c.hint)}</p></details>
-          <details class="reveal" style="margin-top:8px" id="solutionBox"><summary>Show the reference solutions</summary>
-            <p class="hint-text">Try for at least 15 minutes first. Reading a solution after a real attempt still teaches you a lot.</p>
-            <div class="tabs" role="tablist"><button role="tab" type="button" class="tab active" data-tab="js" aria-selected="true">${c.kind === 'html' ? 'HTML and CSS' : 'JavaScript'}</button><button role="tab" type="button" class="tab" data-tab="java" aria-selected="false">${c.kind === 'html' ? 'React / Tailwind' : (/^\s*(static|class|public)/.test(c.java) ? 'Java' : 'In practice')}</button></div>
-            <pre class="code" data-panel="js"><code>${esc(c.solution)}</code></pre>
-            <pre class="code" data-panel="java" hidden><code>${esc(c.java)}</code></pre>
-            <p><b>Complexity:</b> ${esc(c.complexity)}</p>
+          <details class="reveal" style="margin-top:8px" id="solutionBox"><summary>Show a reference solution</summary>
+            <p class="hint-text">Try for at least 15 minutes first. Your own code is checked by the tests, so any correct approach passes, not only this one.</p>
+            <div class="tabs" role="tablist"><button role="tab" type="button" class="tab active" data-tab="js" aria-selected="true">${LANG_LABEL[lang]}</button>${altSolution && altLabel ? `<button role="tab" type="button" class="tab" data-tab="java" aria-selected="false">${altLabel}</button>` : ''}</div>
+            <pre class="code" data-panel="js"><code>${esc(refSolution || '')}</code></pre>
+            ${altSolution && altLabel ? `<pre class="code" data-panel="java" hidden><code>${esc(altSolution)}</code></pre>` : ''}
+            <p><b>Notes:</b> ${esc(c.complexity)}</p>
           </details>
         </section>
         <section class="card editor-card" aria-label="Code editor and tests">
-          <label class="sr-only" for="challengeCode">Your code</label>
-          <textarea class="textarea code-editor" id="challengeCode" spellcheck="false" autocapitalize="off" autocomplete="off">${esc(drafts[c.id] || c.starter)}</textarea>
+          ${langs.length > 1 ? `<div class="lang-switch" role="group" aria-label="Language">${langs.map((l) => `<button type="button" class="chip light${l === lang ? ' active' : ''}" data-switchlang="${l}" aria-pressed="${l === lang}">${LANG_LABEL[l]}</button>`).join('')}</div>` : `<div class="lang-switch"><span class="lang-tag">${LANG_LABEL[lang]}</span></div>`}
+          <div class="runner-note" id="runnerNote" hidden></div>
+          <label class="sr-only" for="challengeCode">Your ${LANG_LABEL[lang]} code</label>
+          <textarea class="textarea code-editor" id="challengeCode" spellcheck="false" autocapitalize="off" autocomplete="off">${esc(drafts[draftKey] || starter)}</textarea>
           <div class="btn-row" style="margin-top:10px">
             <button class="btn dark" type="button" id="runChallenge">Run the tests (Ctrl + Enter)</button>
             <button class="btn" type="button" id="resetChallenge">Reset code</button>
@@ -1480,34 +1561,45 @@
           </div>
           ${c.kind === 'html' ? '<h4>Preview</h4><iframe class="preview-frame" id="preview" title="Preview of your page" sandbox="allow-same-origin"></iframe>' : ''}
           <h4>Tests</h4>
-          <ul class="test-list" id="testList" aria-live="polite">${c.tests.map((t, i) => `<li class="test" data-test="${i}"><span class="test-icon" aria-hidden="true">○</span><span>${esc(testLabel(c, t))}</span></li>`).join('')}</ul>
+          <ul class="test-list" id="testList" aria-live="polite">${tests.map((t, i) => `<li class="test" data-test="${i}"><span class="test-icon" aria-hidden="true">○</span><span>${esc(testLabel(c, t, lang))}</span></li>`).join('')}</ul>
           <div class="test-summary" id="testSummary">${Solved.has(c.id) ? '✓ You have solved this before.' : 'Run the tests to check your code.'}</div>
-          ${next ? `<a class="btn small" style="margin-top:10px" href="practice.html?c=${next.id}">Next challenge: ${esc(next.title)} →</a>` : ''}
+          <div id="runOutputWrap" hidden><h4>Output</h4><pre class="code light run-output" id="runOutput"></pre></div>
+          ${fromProject ? `<a class="btn small" style="margin-top:10px" href="projects.html?p=${fromProject.id}">← Back to ${esc(fromProject.title)}</a>` : next ? `<a class="btn small" style="margin-top:10px" href="practice.html?c=${next.id}">Next challenge: ${esc(next.title)} →</a>` : ''}
         </section>
       </div>
     </div></div>`);
-    const code = $('#challengeCode');
-    const saveDraft = () => { const d = store.get(userKey('drafts'), {}); d[c.id] = code.value; store.set(userKey('drafts'), d); };
-    code.addEventListener('input', saveDraft);
-    if (c.kind === 'html') {
-      let pt;
-      const preview = () => { $('#preview').srcdoc = code.value; };
-      code.addEventListener('input', () => { clearTimeout(pt); pt = setTimeout(preview, 300); });
-      preview();
-    }
-    code.addEventListener('keydown', (e) => {
-      if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); code.setRangeText('  ', code.selectionStart, code.selectionEnd, 'end'); saveDraft(); }
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runChallenge(c, code.value); }
-    });
-    $('#resetChallenge').addEventListener('click', () => { if (!confirm('Replace your code with the starter code?')) return; code.value = c.starter; saveDraft(); resetTests(); });
-    $('#runChallenge').addEventListener('click', () => runChallenge(c, code.value));
+    const saveDraft = () => { const d = store.get(userKey('drafts'), {}); d[draftKey] = editor.getValue(); store.set(userKey('drafts'), d); };
+    let previewTimer;
+    const onChange = () => {
+      saveDraft();
+      if (c.kind === 'html') { clearTimeout(previewTimer); previewTimer = setTimeout(() => { $('#preview').srcdoc = editor.getValue(); }, 300); }
+    };
+    editor = createEditor($('#challengeCode'), lang, () => runChallenge(c, editor.getValue(), lang), onChange);
+    if (c.kind === 'html') $('#preview').srcdoc = editor.getValue();
+    $('#resetChallenge').addEventListener('click', () => { if (!confirm('Replace your code with the starter code?')) return; editor.setValue(starter); saveDraft(); resetTests(); });
+    $('#runChallenge').addEventListener('click', () => runChallenge(c, editor.getValue(), lang));
+    $$('[data-switchlang]', app).forEach((b) => b.addEventListener('click', () => {
+      store.set('sd:lang:' + c.id, b.dataset.switchlang);
+      store.set('sd:prefLang', b.dataset.switchlang);
+      renderChallenge(id);
+    }));
     $$('.tab', app).forEach((t) => t.addEventListener('click', () => {
       $$('.tab', app).forEach((x) => { x.classList.toggle('active', x === t); x.setAttribute('aria-selected', String(x === t)); });
       $$('[data-panel]', app).forEach((p) => { p.hidden = p.dataset.panel !== t.dataset.tab; });
     }));
+    if (lang === 'java') {
+      getRunnerInfo().then((info) => {
+        if (info.java) return;
+        const note = $('#runnerNote');
+        note.hidden = false;
+        note.innerHTML = esc(info.reason) + (Auth.current() ? '' : ' <button type="button" class="btn small" id="runnerLogin">Log in</button>') + (langs.includes('javascript') ? ' You can also solve this one in JavaScript, which runs in your browser.' : '');
+        $('#runChallenge').disabled = true;
+        const rl = $('#runnerLogin'); if (rl) rl.addEventListener('click', () => openAuth('login'));
+      });
+    }
   }
-  function testLabel(c, t) {
-    if (c.kind === 'html') return t.name;
+  function testLabel(c, t, lang) {
+    if (lang === 'java' || lang === 'sql' || c.kind === 'html') return t.name;
     if (c.custom) return t.name + ' → ' + JSON.stringify(t.expected);
     return c.fn + '(' + t.args.map((a) => JSON.stringify(a)).join(', ') + ') → ' + JSON.stringify(t.expected);
   }
@@ -1515,20 +1607,32 @@
     $$('#testList .test').forEach((li) => { li.className = 'test'; $('.test-icon', li).textContent = '○'; const d = $('.test-detail', li); if (d) d.remove(); });
     $('#testSummary').textContent = 'Run the tests to check your code.';
     $('#testSummary').className = 'test-summary';
+    const ow = $('#runOutputWrap'); if (ow) ow.hidden = true;
   }
-  function paintResults(c, r) {
+  function showOutput(text) {
+    const wrap = $('#runOutputWrap');
+    if (!wrap) return;
+    wrap.hidden = !text;
+    $('#runOutput').textContent = text || '';
+  }
+  function paintResults(c, r, prefix) {
     const summary = $('#testSummary');
     r.forEach((res, i) => {
       const li = $(`#testList [data-test="${i}"]`);
+      if (!li) return;
       li.className = 'test ' + (res.pass ? 'pass' : 'fail');
       $('.test-icon', li).textContent = res.pass ? '✓' : '✗';
-      if (!res.pass) li.insertAdjacentHTML('beforeend', `<small class="test-detail">${c.kind === 'html' ? '' : 'Your result: '}${esc(res.got)}</small>`);
+      if (!res.pass && res.got) li.insertAdjacentHTML('beforeend', `<small class="test-detail">${prefix === false ? '' : 'Your result: '}${esc(res.got)}</small>`);
     });
     const passed = r.filter((x) => x.pass).length;
-    const all = passed === r.length;
+    const all = passed === r.length && r.length > 0;
     summary.className = 'test-summary ' + (all ? 'good' : 'bad');
-    summary.textContent = all ? `✓ All ${r.length} tests pass. Well done! Now read the reference solution and compare.` : `${passed} of ${r.length} tests pass. Look at the first failing test — you are getting closer.`;
-    if (all) { Solved.add(c.id); if (!Points.award('challenge:' + c.id, 25)) toast('Challenge solved!'); }
+    summary.textContent = all ? `✓ All ${r.length} tests pass. Well done! Now compare with the reference solution.` : `${passed} of ${r.length} tests pass. Look at the first failing test — you are getting closer.`;
+    if (all) {
+      Solved.add(c.id);
+      if (!Points.award('challenge:' + c.id, 25)) toast('Challenge solved!');
+      PROJECTS.filter((p) => (p.checks || []).includes(c.id) && ProjectProgress.complete(p)).forEach((p) => Points.award('project:' + p.id, 50));
+    }
   }
   // HTML/CSS: render into a sandboxed frame (scripts never run there), then inspect the result.
   function runHtmlChallenge(c, source) {
@@ -1544,13 +1648,130 @@
       paintResults(c, c.tests.map((t) => {
         try { const r = t.check(doc, win); return { pass: r === true, got: r === true ? '' : String(r || 'Not yet.') }; }
         catch (err) { return { pass: false, got: 'Error: ' + err.message }; }
-      }));
+      }), false);
     };
     frame.srcdoc = source;
   }
+  // Java: build a test harness (Main.java) around the learner's own file, and run both on the server.
+  function javaHarness(tests, mark) {
+    const body = tests.map((t) => `        tests.add(() -> { ${t.code} });`).join('\n');
+    return `import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+import java.util.concurrent.Callable;
+
+public class Main {
+    public static void main(String[] args) {
+        List<Callable<Object>> tests = new ArrayList<>();
+${body}
+        for (int i = 0; i < tests.size(); i++) {
+            String out;
+            try { out = "R" + show(tests.get(i).call()); }
+            catch (Throwable e) { out = "E" + e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage()); }
+            System.out.println("${mark}" + i + "\\t" + out.replace("\\\\", "\\\\\\\\").replace("\\n", "\\\\n"));
+            System.out.flush();
+        }
+    }
+
+    static String show(Object o) {
+        if (o == null) return "null";
+        if (o instanceof int[] x) return Arrays.toString(x);
+        if (o instanceof long[] x) return Arrays.toString(x);
+        if (o instanceof double[] x) return Arrays.toString(x);
+        if (o instanceof boolean[] x) return Arrays.toString(x);
+        if (o instanceof char[] x) return Arrays.toString(x);
+        if (o instanceof Object[] x) return Arrays.deepToString(x);
+        return String.valueOf(o);
+    }
+}
+`;
+  }
+  async function runJavaChallenge(c, source) {
+    const btn = $('#runChallenge');
+    const summary = $('#testSummary');
+    resetTests();
+    summary.textContent = 'Compiling and running on the server…';
+    btn.disabled = true;
+    try {
+      const pub = source.match(/^\s*public\s+(?:final\s+|abstract\s+|sealed\s+)*(?:class|record|interface|enum)\s+([A-Za-z_]\w*)/m);
+      const fileName = (pub ? pub[1] : (c.kind === 'java' ? c.fn : 'Solution')) + '.java';
+      if (fileName === 'Main.java') { summary.className = 'test-summary bad'; summary.textContent = '✗ Please do not name your class Main: Study Desk uses Main for its tests.'; return; }
+      const mark = '@@SD' + Math.random().toString(36).slice(2, 10) + '@@';
+      const r = await postRun({ 'Main.java': javaHarness(c.javaTests, mark), [fileName]: source });
+      if (r.error) { summary.className = 'test-summary bad'; summary.textContent = '✗ ' + r.error; return; }
+      if (!r.compiled) {
+        summary.className = 'test-summary bad';
+        const inTests = /Main\.java/.test(r.stderr) && !new RegExp(fileName.replace('.', '\\.')).test(r.stderr);
+        summary.textContent = inTests ? '✗ The tests could not call your code. Check the class and method names and the parameter types match the task.' : '✗ Your code does not compile yet. Read the first error below; the line number points at your code.';
+        showOutput(r.stderr.trim());
+        return;
+      }
+      const results = new Map();
+      const printed = [];
+      for (const line of r.stdout.split('\n')) {
+        if (line.startsWith(mark)) {
+          const tab = line.indexOf('\t');
+          const raw = line.slice(tab + 1).replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
+          results.set(Number(line.slice(mark.length, tab)), raw);
+        } else if (line) printed.push(line);
+      }
+      paintResults(c, c.javaTests.map((t, i) => {
+        if (!results.has(i)) return { pass: false, got: r.timedOut ? 'Took too long (over 10 seconds). Check for a loop that never ends.' : 'Did not finish.' };
+        const v = results.get(i);
+        return v[0] === 'R' ? { pass: v.slice(1) === t.expected, got: v.slice(1) + '   (expected ' + t.expected + ')' } : { pass: false, got: 'Threw ' + v.slice(1) };
+      }));
+      showOutput([printed.join('\n'), r.stderr.trim()].filter(Boolean).join('\n'));
+    } finally { btn.disabled = false; }
+  }
+  // SQL: run the learner's query on a fresh in-memory SQLite database inside a Web Worker (with a time limit).
+  function runSqlChallenge(c, source) {
+    const btn = $('#runChallenge');
+    const summary = $('#testSummary');
+    resetTests();
+    summary.textContent = 'Running your query…';
+    btn.disabled = true;
+    const base = location.href.replace(/[^/]*$/, '') + 'js/vendor/sqljs/';
+    const workerSrc = `self.onmessage = async function (e) {
+      try {
+        importScripts(${JSON.stringify(base + 'sql-wasm.js')});
+        const SQL = await initSqlJs({ locateFile: (f) => ${JSON.stringify(base)} + f });
+        const db = new SQL.Database();
+        db.run(e.data.schema);
+        const res = db.exec(e.data.query);
+        const last = res[res.length - 1] || { columns: [], values: [] };
+        self.postMessage({ columns: last.columns, rows: last.values });
+      } catch (err) { self.postMessage({ error: String(err.message || err) }); }
+    };`;
+    let worker;
+    try { worker = new Worker(URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' }))); }
+    catch (e) { summary.textContent = 'This browser blocked the SQL runner: ' + e.message; btn.disabled = false; return; }
+    const finish = () => { clearTimeout(timer); worker.terminate(); btn.disabled = false; };
+    const timer = setTimeout(() => { finish(); summary.className = 'test-summary bad'; summary.textContent = '✗ Stopped after 5 seconds. Check for a query that never ends.'; }, 5000);
+    worker.onmessage = (e) => {
+      finish();
+      const d = e.data;
+      if (d.error) { summary.className = 'test-summary bad'; summary.textContent = '✗ SQL error: ' + d.error; return; }
+      const norm = (v) => (typeof v === 'number' ? String(Math.round(v * 1e6) / 1e6) : String(v));
+      const key = (row) => JSON.stringify(row.map(norm));
+      const got = d.rows.map(key), want = c.expected.rows.map(key);
+      if (!c.ordered) { got.sort(); want.sort(); }
+      const colsOk = d.columns.length === c.expected.columns.length && d.columns.every((col, i) => col.toLowerCase() === c.expected.columns[i].toLowerCase());
+      const rowsOk = got.length === want.length && got.every((g, i) => g === want[i]);
+      const table = [d.columns.join(' | '), ...d.rows.slice(0, 20).map((r) => r.map(norm).join(' | '))].join('\n') + (d.rows.length > 20 ? `\n… ${d.rows.length - 20} more rows` : '');
+      paintResults(c, [
+        { pass: colsOk, got: d.columns.join(', ') || '(no columns)' },
+        { pass: rowsOk, got: `${d.rows.length} row${d.rows.length === 1 ? '' : 's'}${rowsOk ? '' : ' — compare with the table below'}` },
+      ]);
+      showOutput(table);
+    };
+    worker.onerror = (e) => { finish(); summary.className = 'test-summary bad'; summary.textContent = '✗ ' + (e.message || 'Error running the query'); e.preventDefault(); };
+    worker.postMessage({ schema: c.schema, query: source });
+  }
   // Runs user code in a Web Worker with a time limit so loops cannot freeze the page.
-  function runChallenge(c, source) {
+  function runChallenge(c, source, lang) {
     if (c.kind === 'html') return runHtmlChallenge(c, source);
+    if (lang === 'java' || c.kind === 'java') return runJavaChallenge(c, source);
+    if (c.kind === 'sql') return runSqlChallenge(c, source);
     const btn = $('#runChallenge');
     const summary = $('#testSummary');
     resetTests();
@@ -1607,9 +1828,14 @@
     document.title = p.title + ' · Projects · Study Desk';
     setPage(`<div class="page"><div class="container narrow">
       ${pageHead({ crumbs: [['projects.html', 'Projects'], [null, cert.title]], title: p.title, desc: esc(p.summary) + `<br><b>Stack:</b> ${esc(p.stack)} · <b>Time:</b> ${esc(p.hours)}`, extra: `<div class="progress-line" id="projProgress"></div>` })}
+      ${(p.checks || []).length ? `<div class="card readable project-checks">
+        <h2>Automated checks</h2>
+        <p class="hint-text">The core code of this project, checked by tests in the editor. Write your own solution; it passes when the tests pass.</p>
+        <ul class="check-list">${p.checks.map(challengeById).filter(Boolean).map((c) => `<li><a class="challenge-row" href="practice.html?c=${c.id}&from=${p.id}"><span class="proj-check ${Solved.has(c.id) ? 'done' : ''}" aria-hidden="true">${Solved.has(c.id) ? '✓' : ''}</span><span class="challenge-main"><b>${esc(c.title)}</b><small>${esc(c.pattern)}</small></span><span class="lang-tags">${challengeLangs(c).map((l) => `<span class="lang-tag">${LANG_LABEL[l]}</span>`).join('')}</span><span class="sr-only">${Solved.has(c.id) ? 'Passed' : 'Not passed yet'}</span></a></li>`).join('')}</ul>
+      </div>` : ''}
       <div class="card readable">
         <h2>User stories</h2>
-        <p class="hint-text">Tick a story when your project does it. Work on one at a time.</p>
+        <p class="hint-text">Tick a story when your project does it. Work on one at a time.${(p.checks || []).length ? '' : ' This project is about tools and teamwork rather than one piece of code, so it is checked by these stories.'}</p>
         <div id="stories">${p.stories.map((s, i) => `<div class="check-row"><input type="checkbox" id="story-${i}" data-story="${i}"${state.stories[i] ? ' checked' : ''}><label for="story-${i}">${esc(s)}</label></div>`).join('')}</div>
         <h2 style="margin-top:20px">Stretch goals</h2>
         <ul>${p.stretch.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>
@@ -1624,7 +1850,9 @@
     </div></div>`);
     const paint = () => {
       const n = ProjectProgress.count(p);
-      $('#projProgress').innerHTML = `<span class="progress-badge">${n}/${p.stories.length}</span><span class="progress-text">${n === p.stories.length ? 'All user stories done — project complete!' : 'user stories done'}</span>${bar(Math.round((n / p.stories.length) * 100), 'Project progress')}`;
+      const k = ProjectProgress.checksPassed(p), kt = (p.checks || []).length;
+      const total = p.stories.length + kt, doneAll = n + k;
+      $('#projProgress').innerHTML = `<span class="progress-badge">${doneAll}/${total}</span><span class="progress-text">${ProjectProgress.complete(p) ? 'Project complete!' : `${n}/${p.stories.length} user stories${kt ? ` · ${k}/${kt} automated checks passed` : ''}`}</span>${bar(Math.round((doneAll / total) * 100), 'Project progress')}`;
     };
     paint();
     $('#stories').addEventListener('change', (e) => {
