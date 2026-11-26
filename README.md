@@ -49,9 +49,9 @@ npm start
 
 Then open http://localhost:8000. Use `localhost` or HTTPS, because password hashing needs a secure context.
 
-## Admin account
+## Accounts and data
 
-On first load the site creates an `admin` account with the password `Password`. After logging in with it, you must choose a new password before you can continue. Any logged-in user can change their password by clicking their name in the top bar.
+Any logged-in user can change their password by clicking their name in the top bar.
 
 All data (accounts, progress, notes, discussions) is stored in the browser's localStorage. It stays on one device and is not a real server-side login.
 
