@@ -1,29 +1,28 @@
 // End-to-end tests for Study Desk. Run with: npm test
-// Starts a static server on localhost (needed for Web Crypto) and drives Chromium with Playwright.
+// Starts the real Study Desk server (server.js) with a temporary data folder and
+// test-only admin settings, then drives Chromium with Playwright.
 const { test, before, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const http = require('node:http');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { createApp } = require('../server.js');
 
-const ROOT = path.join(__dirname, '..');
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
-let server, browser, ctx, page, base, errors;
+// Generated per run: no admin credentials are stored in the repository.
+const ADMIN_USER = 'owner_' + crypto.randomBytes(3).toString('hex');
+const ADMIN_PASS = crypto.randomBytes(12).toString('base64url');
+let server, browser, ctx, page, base, errors, dataDir;
 
 before(async () => {
-  server = http.createServer((req, res) => {
-    const url = decodeURIComponent(req.url.split('?')[0]);
-    const file = path.join(ROOT, url === '/' ? 'index.html' : url);
-    if (!file.startsWith(ROOT) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
-    res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' });
-    fs.createReadStream(file).pipe(res);
-  });
+  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'studydesk-test-'));
+  ({ server } = await createApp({ dataDir, adminUsername: ADMIN_USER, adminPassword: ADMIN_PASS, log: () => {} }));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://localhost:${server.address().port}/`;
   browser = await chromium.launch();
 });
-after(async () => { await browser.close(); server.close(); });
+after(async () => { await browser.close(); server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
 
 beforeEach(async () => {
   ctx = await browser.newContext({ acceptDownloads: true });
@@ -325,52 +324,42 @@ test('notes: create, edit, search and delete', async () => {
   noErrors();
 });
 
-test('auth: default admin (admin / Password) must change password; members and per-user data', async () => {
+const login = async (username, password) => {
+  await page.click('#loginBtn');
+  await page.fill('#authUsername', username);
+  await page.fill('#authPassword', password);
+  await page.click('#authSubmit');
+};
+
+test('auth: admin login comes from server settings; members, sessions and per-user data', async () => {
   await go('lesson.html?m=oop&i=0');
   await page.click('#completeNext'); // guest progress
 
-  await page.click('#loginBtn');
-  await page.fill('#authUsername', 'admin');
-  await page.fill('#authPassword', 'wrong-one');
-  await page.click('#authSubmit');
-  await page.waitForFunction(() => document.querySelector('#authError').textContent.length > 0);
-  await page.fill('#authPassword', 'Password');
+  // Wrong password is refused with a generic message.
+  await login(ADMIN_USER, 'not-the-password');
+  await page.waitForFunction(() => /Incorrect username or password/.test(document.querySelector('#authError').textContent));
+  // Correct admin password from the server settings works.
+  await page.fill('#authPassword', ADMIN_PASS);
   await page.click('#authSubmit');
   await page.waitForSelector('.role-badge');
-  await page.waitForSelector('#pwModal.open');
-  assert.ok(!(await page.isVisible('#pwClose')), 'forced change has no close button');
-  await page.keyboard.press('Escape');
-  assert.ok(await page.isVisible('#pwModal'), 'Escape does not dismiss forced change');
-  await page.reload();
-  await page.waitForSelector('#pwModal.open');
-  await page.fill('#pwCurrent', 'Password');
-  await page.fill('#pwNew', 'Password');
-  await page.fill('#pwConfirm', 'Password');
-  await page.click('#pwSubmit');
-  await page.waitForFunction(() => /different/.test(document.querySelector('#pwError').textContent));
-  await page.fill('#pwNew', 'adminpass123');
-  await page.fill('#pwConfirm', 'adminpass123');
-  await page.click('#pwSubmit');
-  await page.waitForSelector('#pwModal:not(.open)', { state: 'attached' });
-  await page.reload();
-  await page.waitForSelector('.role-badge');
-  await page.waitForTimeout(300);
-  assert.ok(!(await page.isVisible('#pwModal')), 'no prompt after password changed');
   assert.doesNotMatch(await page.getAttribute('.steps .step >> nth=0', 'class'), /done/, 'admin has separate progress');
+  // Session survives a reload (HttpOnly cookie, not readable from JS).
+  await page.reload();
+  await page.waitForSelector('.role-badge');
+  assert.equal(await page.evaluate(() => document.cookie.includes('sd_session')), false, 'session cookie is HttpOnly');
+  // The admin password cannot be changed from the website.
+  await page.click('#accountBtn');
+  assert.ok(!(await page.isVisible('#pwModal')));
   await page.click('#logoutBtn');
-  await page.click('#loginBtn');
-  await page.fill('#authUsername', 'admin');
-  await page.fill('#authPassword', 'Password');
-  await page.click('#authSubmit');
-  await page.waitForFunction(() => /Incorrect/.test(document.querySelector('#authError').textContent));
-  await page.click('#authClose');
+  await page.waitForSelector('#loginBtn');
 
+  // Registration rules are enforced by the server.
   await page.click('#signupBtn');
-  await page.fill('#authUsername', 'admin');
+  await page.fill('#authUsername', ADMIN_USER);
   await page.fill('#authPassword', 'password123');
   await page.fill('#authConfirm', 'password123');
   await page.click('#authSubmit');
-  assert.match(await page.textContent('#authError'), /reserved/);
+  await page.waitForFunction(() => /not available/.test(document.querySelector('#authError').textContent));
   await page.fill('#authUsername', 'sosa');
   await page.fill('#authConfirm', 'different1');
   await page.click('#authSubmit');
@@ -378,9 +367,23 @@ test('auth: default admin (admin / Password) must change password; members and p
   await page.fill('#authConfirm', 'password123');
   await page.click('#authSubmit');
   await page.waitForSelector('#logoutBtn');
-  const stored = await page.evaluate(() => localStorage.getItem('sd:users'));
-  assert.ok(!stored.includes('password123') && !stored.includes('adminpass123'));
 
+  // Nothing about accounts is kept in the browser any more.
+  const local = await page.evaluate(() => JSON.stringify(localStorage));
+  assert.ok(!local.includes('password123') && !local.includes(ADMIN_PASS) && !local.includes('sd:users'));
+  // Passwords on disk are scrypt hashes; the admin is never written to disk.
+  const onDisk = fs.readFileSync(path.join(dataDir, 'users.json'), 'utf8');
+  assert.ok(onDisk.includes('scrypt$') && !onDisk.includes('password123') && !onDisk.includes(ADMIN_USER));
+
+  // Member changes their password.
+  await page.click('#accountBtn');
+  await page.fill('#pwCurrent', 'password123');
+  await page.fill('#pwNew', 'newpassword456');
+  await page.fill('#pwConfirm', 'newpassword456');
+  await page.click('#pwSubmit');
+  await page.waitForSelector('#pwModal:not(.open)', { state: 'attached' });
+
+  // Member posts; guests cannot delete it; the admin can.
   await go('community.html');
   await page.click('#newTopic');
   await page.fill('#topicTitle', 'Member topic');
@@ -388,17 +391,40 @@ test('auth: default admin (admin / Password) must change password; members and p
   await page.click('#topicForm button[type="submit"]');
   await page.waitForSelector('[data-delete]');
   await page.click('#logoutBtn');
+  await page.waitForSelector('#loginBtn');
   await page.waitForSelector('.topic');
   assert.equal(await count('[data-delete]'), 0, 'guest cannot delete member post');
-  await page.click('#loginBtn');
-  await page.fill('#authUsername', 'admin');
-  await page.fill('#authPassword', 'adminpass123');
+  await login('sosa', 'password123');
+  await page.waitForFunction(() => /Incorrect/.test(document.querySelector('#authError').textContent));
+  await page.fill('#authPassword', 'newpassword456');
   await page.click('#authSubmit');
+  await page.waitForSelector('#logoutBtn');
+  await page.click('#logoutBtn');
+  await page.waitForSelector('#loginBtn');
+  await login(ADMIN_USER, ADMIN_PASS);
   await page.waitForSelector('[data-delete]');
   await page.click('#logoutBtn');
   await go('lesson.html?m=oop&i=0');
   assert.match(await page.getAttribute('.steps .step >> nth=0', 'class'), /done/, 'guest progress kept');
   noErrors();
+});
+
+test('server API: rate limits, cross-site refusal, and no access to private files', async () => {
+  const api = (p, body, headers = {}) => fetch(base + p.replace(/^\//, ''), { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+  const cross = await api('/api/login', { username: 'x', password: 'y' }, { Origin: 'https://evil.example' });
+  assert.equal(cross.status, 403, 'cross-origin POST refused');
+  const form = await fetch(base + 'api/login', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'username=a&password=b' });
+  assert.equal(form.status, 415, 'non-JSON refused');
+  for (const f of ['server.js', '.env', 'data/users.json', 'package.json', 'tests/app.test.js', '..%2fserver.js', 'js/../server.js']) {
+    const r = await fetch(base + f);
+    assert.equal(r.status, 404, f + ' must not be served');
+  }
+  const page1 = await fetch(base);
+  assert.match(page1.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.equal(page1.headers.get('x-frame-options'), 'DENY');
+  let last;
+  for (let i = 0; i < 11; i++) last = await api('/api/login', { username: 'nobody_' + i, password: 'wrong-password' });
+  assert.equal(last.status, 429, 'repeated failures are rate limited');
 });
 
 test('mobile layout: menu toggles and no page scrolls sideways', async () => {

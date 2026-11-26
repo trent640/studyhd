@@ -156,86 +156,55 @@
   };
   const userKey = (name) => 'sd:' + (Auth.current() ? Auth.current().username : 'guest') + ':' + name;
 
-  /* ================= Auth (local, salted PBKDF2) ================= */
+  /* ================= Auth (server-side accounts via /api) ================= */
   const Auth = (function () {
-    const USERS = 'sd:users';
-    const SESSION = 'sd:session';
-    const ADMIN = 'admin';
-    const DEFAULT_ADMIN_PASSWORD = 'Password'; // must be changed on first login
-    const users = () => store.get(USERS, []);
-    const hex = (buf) => Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    let user = null;        // { username, role } for the signed-in user
+    let available = false;  // true when the Study Desk server answered /api/me
+    store.remove('sd:users'); store.remove('sd:session'); // drop old browser-only accounts
 
-    async function hashPassword(password, salt) {
-      if (!window.crypto || !crypto.subtle) throw new Error('Secure hashing needs https or localhost.');
-      const enc = new TextEncoder();
-      const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
-      const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256' }, key, 256);
-      return hex(bits);
-    }
-    function newSalt() { const a = new Uint8Array(16); crypto.getRandomValues(a); return hex(a); }
-    function validName(name) { return /^[a-zA-Z0-9_.-]{3,32}$/.test(name); }
-    function current() {
-      const name = store.get(SESSION, null);
-      if (!name) return null;
-      const u = users().find((x) => x.username === name);
-      return u ? { username: u.username, role: u.role, createdAt: u.createdAt, mustChangePassword: !!u.mustChangePassword } : null;
-    }
-    const adminExists = () => users().some((u) => u.username === ADMIN);
-    async function createUser(username, password, role, extra = {}, signIn = true) {
-      const salt = newSalt();
-      const passwordHash = await hashPassword(password, salt);
-      const list = users();
-      list.push({ username, role, salt, passwordHash, createdAt: Date.now(), ...extra });
-      store.set(USERS, list);
-      if (signIn) store.set(SESSION, username);
-      return current();
-    }
-    // Seed the built-in admin account (admin / Password) the first time the site loads.
-    let seeding = null;
-    function ready() {
-      if (!seeding) {
-        seeding = adminExists() ? Promise.resolve()
-          : createUser(ADMIN, DEFAULT_ADMIN_PASSWORD, 'admin', { mustChangePassword: true }, false).catch(() => {});
+    async function call(path, body) {
+      let res;
+      try {
+        res = await fetch(path, body === undefined
+          ? { credentials: 'same-origin', headers: { Accept: 'application/json' } }
+          : { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) });
+      } catch (e) { return { ok: false, message: 'Cannot reach the Study Desk server.' }; }
+      let data = {};
+      try { data = await res.json(); } catch (e) { /* not JSON: probably no server */ }
+      if (!res.ok) {
+        const message = data.error || (res.status === 404 || res.status === 501 ? 'Accounts need the Study Desk server. Start it with "npm start".' : 'Something went wrong (' + res.status + ').');
+        return { ok: false, status: res.status, message };
       }
-      return seeding;
+      return { ok: true, ...data };
+    }
+    async function init() {
+      const r = await call('/api/me');
+      available = r.ok;
+      user = r.ok ? r.user : null;
     }
     async function login(username, password) {
-      username = username.trim();
-      if (!username || !password) return { ok: false, message: 'Enter your username and password.' };
-      await ready();
-      const u = users().find((x) => x.username.toLowerCase() === username.toLowerCase());
-      if (!u) return { ok: false, message: 'No account with that username.' };
-      if (await hashPassword(password, u.salt) !== u.passwordHash) return { ok: false, message: 'Incorrect password.' };
-      store.set(SESSION, u.username);
-      return { ok: true, user: current() };
+      if (!username.trim() || !password) return { ok: false, message: 'Enter your username and password.' };
+      const r = await call('/api/login', { username: username.trim(), password });
+      if (r.ok) user = r.user;
+      return r;
     }
     async function register(username, password, confirm) {
-      username = username.trim();
-      if (!validName(username)) return { ok: false, message: 'Usernames are 3–32 letters, numbers, dots, dashes or underscores.' };
-      if (username.toLowerCase() === ADMIN) return { ok: false, message: '"admin" is reserved.' };
-      if (users().some((u) => u.username.toLowerCase() === username.toLowerCase())) return { ok: false, message: 'That username is taken.' };
-      if (password.length < 8) return { ok: false, message: 'Password must be at least 8 characters.' };
       if (password !== confirm) return { ok: false, message: 'Passwords do not match.' };
-      return { ok: true, user: await createUser(username, password, 'member') };
+      const r = await call('/api/register', { username: username.trim(), password });
+      if (r.ok) user = r.user;
+      return r;
     }
-    async function changePassword(currentPw, newPw, confirmPw) {
-      const me = current();
-      if (!me) return { ok: false, message: 'Log in first.' };
-      const list = users();
-      const u = list.find((x) => x.username === me.username);
-      if (await hashPassword(currentPw, u.salt) !== u.passwordHash) return { ok: false, message: 'Current password is incorrect.' };
-      if (newPw.length < 8) return { ok: false, message: 'New password must be at least 8 characters.' };
-      if (newPw === currentPw) return { ok: false, message: 'Choose a password different from the current one.' };
-      if (newPw !== confirmPw) return { ok: false, message: 'New passwords do not match.' };
-      u.salt = newSalt();
-      u.passwordHash = await hashPassword(newPw, u.salt);
-      delete u.mustChangePassword;
-      store.set(USERS, list);
-      return { ok: true };
+    async function changePassword(currentPassword, newPassword, confirmPw) {
+      if (newPassword !== confirmPw) return { ok: false, message: 'New passwords do not match.' };
+      return call('/api/password', { currentPassword, newPassword });
     }
-    function logout() { store.remove(SESSION); }
-    const isAdmin = () => { const u = current(); return !!u && u.role === 'admin'; };
-    return { login, register, logout, current, isAdmin, adminExists, changePassword, ready };
+    async function logout() { await call('/api/logout', {}); user = null; }
+    return {
+      init, login, register, changePassword, logout,
+      current: () => user,
+      isAdmin: () => !!user && user.role === 'admin',
+      available: () => available,
+    };
   })();
 
   /* ================= Progress ================= */
@@ -1483,10 +1452,13 @@
   function renderNavUser() {
     const u = Auth.current();
     $('#navRight').innerHTML = u
-      ? `<button type="button" class="nav-user" id="accountBtn" title="Change password"><span class="avatar" aria-hidden="true">${esc(u.username[0].toUpperCase())}</span><span class="uname">${esc(u.username)}</span>${u.role === 'admin' ? '<span class="role-badge">ADMIN</span>' : ''}</button><button class="btn small" type="button" id="logoutBtn">Log out</button>`
+      ? `<button type="button" class="nav-user" id="accountBtn" title="${u.role === 'admin' ? 'Signed in as admin' : 'Change password'}"><span class="avatar" aria-hidden="true">${esc(u.username[0].toUpperCase())}</span><span class="uname">${esc(u.username)}</span>${u.role === 'admin' ? '<span class="role-badge">ADMIN</span>' : ''}</button><button class="btn small" type="button" id="logoutBtn">Log out</button>`
       : '<button class="btn small" type="button" id="loginBtn">Log in</button><button class="btn small light" type="button" id="signupBtn">Sign up</button>';
-    const lo = $('#logoutBtn'); if (lo) lo.addEventListener('click', () => { Auth.logout(); renderNavUser(); route(); toast('Logged out.'); });
-    const ab = $('#accountBtn'); if (ab) ab.addEventListener('click', () => openPwModal(false));
+    const lo = $('#logoutBtn'); if (lo) lo.addEventListener('click', async () => { await Auth.logout(); renderNavUser(); route(); toast('Logged out.'); });
+    const ab = $('#accountBtn'); if (ab) ab.addEventListener('click', () => {
+      if (Auth.isAdmin()) { toast('The admin password is managed in the server settings.'); return; }
+      openPwModal();
+    });
     const li = $('#loginBtn'); if (li) li.addEventListener('click', () => openAuth('login'));
     const su = $('#signupBtn'); if (su) su.addEventListener('click', () => openAuth('register'));
   }
@@ -1501,7 +1473,9 @@
     $('#authSwitchText').innerHTML = reg ? 'Already have an account? <button type="button" id="authSwitch">Log in</button>' : 'New here? <button type="button" id="authSwitch">Create an account</button>';
     $('#authSwitch').addEventListener('click', () => setAuthMode(reg ? 'login' : 'register'));
     $('#authError').textContent = '';
-    $('#authNote').innerHTML = 'Accounts are stored only in this browser. Passwords are salted and hashed before saving.';
+    $('#authNote').innerHTML = Auth.available()
+      ? 'Your account is stored on the Study Desk server. Progress and notes stay in this browser.'
+      : '<b>Accounts are unavailable:</b> the Study Desk server is not running. You can keep studying as a guest.';
   }
   function openAuth(mode) { setAuthMode(mode); $('#authForm').reset(); openModal('authModal'); }
   $('#authClose').addEventListener('click', () => closeModal('authModal'));
@@ -1518,24 +1492,18 @@
       closeModal('authModal');
       renderNavUser();
       route();
-      if (res.user.mustChangePassword) openPwModal(true);
       toast(authMode === 'register' ? 'Welcome, ' + res.user.username + '!' : 'Welcome back, ' + res.user.username + '.');
     } catch (err) {
       $('#authError').textContent = err.message || 'Something went wrong.';
     } finally { btn.disabled = false; btn.textContent = label; }
   });
 
-  let pwForced = false;
-  function openPwModal(forced) {
-    pwForced = forced;
+  function openPwModal() {
     $('#pwForm').reset();
     $('#pwError').textContent = '';
-    $('#pwClose').hidden = forced;
-    $('#pwTitle').textContent = forced ? 'Set a new password' : 'Change your password';
-    $('#pwSub').textContent = forced ? 'You are using the default password. Choose a new one to keep the admin account secure.' : 'Choose a new password for your account.';
     openModal('pwModal');
   }
-  function closePwModal() { if (!pwForced) closeModal('pwModal'); }
+  function closePwModal() { closeModal('pwModal'); }
   $('#pwClose').addEventListener('click', closePwModal);
   $('#pwModal').addEventListener('click', (e) => { if (e.target.id === 'pwModal') closePwModal(); });
   $('#pwForm').addEventListener('submit', async (e) => {
@@ -1546,9 +1514,8 @@
     try {
       const res = await Auth.changePassword($('#pwCurrent').value, $('#pwNew').value, $('#pwConfirm').value);
       if (!res.ok) { $('#pwError').textContent = res.message; return; }
-      pwForced = false;
       closeModal('pwModal');
-      toast('Password updated.');
+      toast('Password updated. Other devices have been signed out.');
     } catch (err) { $('#pwError').textContent = err.message || 'Something went wrong.'; }
     finally { btn.disabled = false; }
   });
@@ -1656,10 +1623,11 @@
   window.addEventListener('popstate', () => { if (PAGE === 'notes') route(); });
   applySettings();
   try { if (PAGE === 'lesson' && sessionStorage.getItem('sd:focusReading')) document.body.classList.add('focus-reading'); } catch (e) { /* ignore */ }
-  renderNavUser();
-  route();
-  BreakTimer.start();
-  Auth.ready().then(() => { const u = Auth.current(); if (u && u.mustChangePassword) openPwModal(true); });
+  Auth.init().finally(() => {
+    renderNavUser();
+    route();
+    BreakTimer.start();
+  });
 
   // A small API for tests and debugging.
   window.StudyDesk = { Auth, Progress, Notes, Settings, MODULES, CERTS, PROJECTS, CHALLENGES, JOBPATHS };

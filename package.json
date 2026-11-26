@@ -2,12 +2,15 @@
   "name": "study-desk",
   "version": "2.0.0",
   "private": true,
-  "description": "Roadmap-style computer science study site (static HTML/CSS/JS).",
+  "description": "Calm, structured computer science study app with a small Node server for accounts.",
   "scripts": {
-    "start": "python3 -m http.server 8000",
+    "start": "node server.js",
     "test": "node --test --test-concurrency=1 tests/*.test.js"
   },
   "devDependencies": {
     "playwright": "^1.48.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

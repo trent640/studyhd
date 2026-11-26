@@ -39,21 +39,41 @@ Lesson pages also have read aloud, focus reading (hides navigation) and keyboard
 | `career.html` | Irish internship requirements (with sources), 12-week plan, job links |
 | `community.html`, `notes.html` | Local discussions and private notes |
 
-Course content is in `js/content/`. The app is in `js/app.js` and the styles are in `css/styles.css`.
+Course content is in `js/content/`. The app is in `js/app.js`, the styles are in `css/styles.css`, and `server.js` is a small Node server (no dependencies) that serves the site and handles accounts.
 
 ## Run
+
+Requires Node.js 18 or newer.
+
+1. Copy `.env.example` to `.env` and fill in your settings. Git ignores `.env`, so these never reach the repository.
+2. Start the server:
 
 ```bash
 npm start
 ```
 
-Then open http://localhost:8000. Use `localhost` or HTTPS, because password hashing needs a secure context.
+Then open http://localhost:8000.
+
+## Server settings
+
+| Setting | Purpose |
+| --- | --- |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | Enable the admin account. The password must be at least 12 characters. Leave both empty to disable it. |
+| `PORT`, `HOST` | Where the server listens (default `127.0.0.1:8000`). |
+| `DATA_DIR` | Where member accounts are saved (default `./data`, ignored by Git). |
+| `COOKIE_SECURE` | Set to `1` when the site is served over HTTPS. |
+| `TRUST_PROXY` | Set to `1` behind a reverse proxy, so rate limiting sees real client addresses. |
+
+Settings can also be given as environment variables, which take priority over `.env`. On a hosting service, use its secret or environment settings instead of a file.
 
 ## Accounts and data
 
-Any logged-in user can change their password by clicking their name in the top bar.
-
-All data (accounts, progress, notes, discussions) is stored in the browser's localStorage. It stays on one device and is not a real server-side login.
+- Members sign up and log in through the server. Passwords are hashed with scrypt and stored in `data/users.json`.
+- The admin password is only read from the server settings and is never written to disk. To change it, change the setting and restart the server.
+- Members can change their password by clicking their name in the top bar; this signs out their other devices.
+- Sessions use an `HttpOnly`, `SameSite=Strict` cookie and last 7 days. Restarting the server signs everyone out.
+- Study progress, notes and discussions are still kept in each browser's localStorage.
+- Without the server (for example, opening the files directly), the site works for guests and login is unavailable.
 
 ## Tests
 
@@ -63,4 +83,4 @@ npm test
 ```
 
 - `tests/content.test.js` checks that every lesson is complete, that each check is a real question, and that all references are consistent. It also runs every challenge solution against its tests.
-- `tests/app.test.js` drives every page in Chromium with Playwright.
+- `tests/app.test.js` starts the server with a temporary data folder and randomly generated admin settings, then drives every page in Chromium with Playwright. It also checks the API's security behaviour.
